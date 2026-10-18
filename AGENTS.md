@@ -12,7 +12,9 @@ Rally is a public event board for college campuses. Students and clubs post even
 - a **start and end** date/time
 - a location and organizer
 
-Sports (especially tennis) are the origin story. The platform is open to any campus event: study sessions, club meetings, open mics, and so on.
+The platform is open to any campus event: study sessions, club meetings, open mics, and so on. Others can join/subscribe to the event (with the number of subscribers displayed on the page), comment on the post, or reach out to the organizer directly (e.g. in-platform direct message, contact info).
+
+Refer to `project.md` file for full details.
 
 ## Stack
 
@@ -21,13 +23,15 @@ Sports (especially tennis) are the origin story. The platform is open to any cam
 - Tailwind CSS v4 via `@tailwindcss/vite`. There is **no** `tailwind.config.js`; theme tokens live in `src/index.css` under `@theme`.
 - No router, state library, or UI kit. Don't add dependencies unless the task needs them.
 
+The following commands can be used:
+
 ```bash
 npm install
 npm run dev      # http://localhost:5173
 npm run build    # must pass before you finish
 ```
 
-## File layout
+## Project layout
 
 ```
 index.html                  # page shell + inline script that applies dark mode before first paint
@@ -50,7 +54,7 @@ src/
   { id, title, description, image, start: "YYYY-MM-DDTHH:mm", end, location, organizer, tag }
   ```
 
-## Design system
+## Page appearance and design
 
 ### Theme: tennis court, green and white
 
@@ -93,28 +97,14 @@ Examples: `bg-page`, `bg-surface`, `text-ink`, `text-muted`, `border-line`, `bg-
 - **Court lines** (`CourtLines` in `App.jsx`): faint white SVG court markings behind the "How it works" section.
 - **Theme toggle** (`ThemeToggle.jsx`): sits at the top right of the navbar on every screen size. It has a sun/moon knob and a four-dot swatch (`page`, `brand-100`, `brand-500`, `ink`) that recolors itself when the theme flips. The choice is saved in `localStorage` under `rally-theme`, falling back to the OS preference. Keep the matching inline script in `index.html` in sync.
 
-## Copy and voice
-
-- **Audience: college students.** Write casual, upbeat, campus-specific copy, such as "Done between classes", club group chats, intramurals, dorms, finals.
-- Keep it short: headings are a few words, and body text is one or two sentences.
-- Use second person ("your classmates", "you").
-- **No fake social proof.** Don't add made-up replies, comment counts, testimonials, user counts, or ratings. Sample events are clearly examples ("Examples of what students post on Rally").
-- No pricing or trust filler like "No credit card required".
-- The tagline is **"Post the event. Rally your people."** Keep it.
-
-## Accessibility
+### Accessibility
 
 - Decorative SVGs get `aria-hidden="true"`. Icon-only buttons get an `aria-label`.
 - The theme toggle is a `role="switch"` with `aria-checked`.
 - Inputs without visible labels need an `aria-label`.
 - Animations must be disabled under `prefers-reduced-motion: reduce`.
 
-## Known placeholders
-
-- Event images come from `picsum.photos` and don't match the events. Replace them with real assets when available.
-- Buttons, nav links, and the email form aren't wired up (`href="#"`, and `preventDefault` on submit).
-
-## Before you finish
+## Finalizing each change
 
 1. Run `npm run build`, and it must succeed.
 2. Check the page in **both** light and dark mode, at desktop width and at 375px.
