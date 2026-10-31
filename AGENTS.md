@@ -67,11 +67,13 @@ The platform is open to any campus event: study sessions, club meetings, open mi
 
 - Table of users
     - Name, SHA-256 hashed password, 10-digit UID, profile picture data
-    - If a user is deleted, it is shown as "Deleted account" in comments and direct messages (represented as NULL in database)
+    - If a user is deleted (`is_active` set to false), it is shown as "Deleted account" in comments and direct messages
+    - Backend validation: Picture size ≤ 10MB (convert & compress uploaded file to PNG)
 - Table of event categories
     - Category ID, name
 - Table for events created
     - Title, picture (encoded in base64 data URL), start & end date, organizer UID, unique event ID, category
+    - Backend validation: Title ≤ 100 chars; prevent user from choosing end date earlier than start date, etc.
 - Tables for comments under each post (labeled with event ID)
     - Comment content, sender UID, comment ID, replying comment ID, date
 - Table for "joined events" information
@@ -92,7 +94,8 @@ CREATE TABLE users(
     full_name TEXT NOT NULL,
     pwd_hash TEXT NOT NULL, -- SHA-256 hash
     -- Image file encoded in "data:image/<format>;base64,<base64 encoded data>"
-    profile_pic_data TEXT
+    profile_pic_data TEXT,
+    is_active BOOLEAN NOT NULL -- Set to false when account is deleted
 );
 
 -- Table of event categories
@@ -108,7 +111,7 @@ CREATE TABLE events(
     create_time BIGINT NOT NULL,
     start_time BIGINT NOT NULL,
     end_time BIGINT,
-    organizer_uid TEXT NOT NULL REFERENCES users(uid) ON DELETE CASCADE,
+    organizer_uid TEXT NOT NULL REFERENCES users(uid),
     category_id TEXT REFERENCES event_categories(category_id),
     -- Image file encoded in "data:image/<format>;base64,<base64 encoded data>"
     picture_data TEXT
@@ -119,7 +122,7 @@ CREATE TABLE event_comments_UUID(
     comment_id TEXT PRIMARY KEY,
     comment_content TEXT NOT NULL,
     comment_time BIGINT NOT NULL,
-    sender_uid TEXT REFERENCES users(uid) ON DELETE SET NULL,
+    sender_uid TEXT REFERENCES users(uid),
     -- All replies are deleted when the main comment is deleted; only reference the main comment
     replying_to TEXT REFERENCES event_comments_UUID(comment_id) ON DELETE CASCADE
 );
@@ -127,7 +130,7 @@ CREATE TABLE event_comments_UUID(
 -- Joined events information by user
 CREATE TABLE joined_events(
     event_id TEXT NOT NULL,
-    joiner_uid TEXT NOT NULL REFERENCES users(uid) ON DELETE CASCADE,
+    joiner_uid TEXT NOT NULL REFERENCES users(uid),
     CONSTRAINT uc_event_joiner UNIQUE (event_id, joiner_uid)
 );
 
@@ -136,7 +139,7 @@ CREATE TABLE chats_list(
     chat_id TEXT NOT NULL,
     -- Defaults to event name; each user can set its own name for reference
     chat_name TEXT NOT NULL, 
-    user_id TEXT REFERENCES users(uid) ON DELETE SET NULL,
+    user_id TEXT REFERENCES users(uid),
     CONSTRAINT uc_chat_user UNIQUE (chat_id, user_id)
 );
 
@@ -145,7 +148,7 @@ CREATE TABLE chat_msgs_UUID(
     msg_id TEXT PRIMARY KEY,
     msg_content TEXT NOT NULL,
     msg_time BIGINT NOT NULL,
-    sender_uid TEXT REFERENCES users(uid) ON DELETE SET NULL
+    sender_uid TEXT REFERENCES users(uid)
 );
 ```
 
