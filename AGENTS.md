@@ -21,18 +21,26 @@ The platform is open to any campus event: study sessions, club meetings, open mi
 ### Create account page
 
 - Each user is randomly assigned a 10-digit UID which serves as the username
-- Password text field with confirmation
+    - Displayed on the create account page
+- Text field to enter full name
+- 2 password text fields (second one for confirmation)
+
+### Login page
+
+- Prompt for the UID and password
+- If user is deleted (`is_active` is false), display an error message saying so
+- Use session token (keep login state until manually logged out)
 
 ### Homepage
 
 - Displayed when the user is logged in
-- The home page lists the available events in a grid view, detailing the picture, title, date, and organizer of the event
+- The home page lists the available events in a grid view, detailing the picture, title, date, and organizer (account) of the event
 - The user can choose different categories (e.g. sport, entertainment) to filter events
     - Additional filters like date range
 
 ### Detail page
 
-- Each post includes a picture, title, description, and the start/end date of the event
+- Each post includes a picture, title, description, and the start/end date of the event with the organizer (account) of it
 - "Join event" button with a display of how many people already joined/subscribed
 - Comments with replies
 - "Direct message" button to contact the organizer
@@ -49,11 +57,13 @@ The platform is open to any campus event: study sessions, club meetings, open mi
 - Grid view of the user's event posts with buttons to edit or delete
 - Account settings button placed right below the profile picture
   - Settings popup include: change/reset profile picture button, edit full name text field, change password fields (original & new), log out button, delete account button
+- Can view other user's profile page by clicking into the account name on event page and comment page (without edit/account settings button)
 
 ### Direct messages page
 
 - List of messages displayed in a menu bar popup on homepage, displaying the chat name and most recent message for each entry
 - Each chat supports simple text messages, attempt to fetch latest messages every 2 seconds in the page
+- If couldn't connect to server, display a small banner in the popup saying so and retry connection as usual (every 2 seconds)
 
 ### Top menu bar
 
@@ -174,6 +184,10 @@ SELECT chat_id, chat_name FROM chats_list WHERE user_id=<id>;
 SELECT * FROM chat_msgs_<Chat ID>;
 ```
 
+## Data functions
+
+Design appropriate functions for inserting values into the database and fetching records based on the example above (perform SQL queries on the Supabase server). Put them into a separate file (e.g. `src/api.jsx`) for organization and clarity. Implement relevant data validation and checks (e.g. title length, required fields, end_time >= start_time, image size/type limits) to prevent bad data from being written.
+
 ## Stack
 
 - React 18 (function components and hooks only)
@@ -199,6 +213,7 @@ src/
   main.jsx                  # React entry
   index.css                 # Tailwind import, theme tokens, dark overrides, logo animation
   App.jsx                   # Core app logic
+  api.jsx                   # Functions for reading/modifying the database
   intro_page.jsx            # Introduction page before logging in
   login_page.jsx            # User login and create account page
   homepage.jsx              # Homepage showing the available events
@@ -207,7 +222,7 @@ src/
   messages_popup.jsx        # Popup view for direct messages
   account_profile.jsx       # Current user profile + account settings popup
   components/
-    EventCard.jsx           # reusable event post card
+    EventCard.jsx           # event item in homepage & account profile display
     Logo.jsx                # SVG tennis racket logo with wind trails
     menu_bar.jsx            # Top menu bar
 ```
