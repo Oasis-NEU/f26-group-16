@@ -127,7 +127,8 @@ CREATE TABLE event_comments_UUID(
 -- Joined events information by user
 CREATE TABLE joined_events(
     event_id TEXT NOT NULL,
-    joiner_uid TEXT NOT NULL REFERENCES users(uid) ON DELETE CASCADE
+    joiner_uid TEXT NOT NULL REFERENCES users(uid) ON DELETE CASCADE,
+    CONSTRAINT uc_event_joiner UNIQUE (event_id, joiner_uid)
 );
 
 -- Chats list information by user
@@ -135,7 +136,8 @@ CREATE TABLE chats_list(
     chat_id TEXT NOT NULL,
     -- Defaults to event name; each user can set its own name for reference
     chat_name TEXT NOT NULL, 
-    user_id TEXT REFERENCES users(uid) ON DELETE SET NULL
+    user_id TEXT REFERENCES users(uid) ON DELETE SET NULL,
+    CONSTRAINT uc_chat_user UNIQUE (chat_id, user_id)
 );
 
 -- [Create for each chat] (UUID represents chat ID)
@@ -151,7 +153,7 @@ CREATE TABLE chat_msgs_UUID(
 
 ```sql
 -- Fetch list of events
-SELECT * FROM events ORDER BY start_date DESC;
+SELECT * FROM events ORDER BY start_time DESC;
 
 -- Fetch number of event joiners for an event
 SELECT COUNT(joiner_uid) FROM joined_events WHERE event_id=<id>;
