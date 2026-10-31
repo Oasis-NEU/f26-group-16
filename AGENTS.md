@@ -59,7 +59,7 @@ The platform is open to any campus event: study sessions, club meetings, open mi
   - Settings popup include: change/reset profile picture button, edit full name text field, change password fields (original & new), log out button, delete account button
 - Can view other user's profile page by clicking into the account name on event page and comment page (without edit/account settings button)
 
-### Direct messages page
+### Direct messages popup
 
 - List of messages displayed in a menu bar popup on homepage, displaying the chat name and most recent message for each entry
 - Each chat supports simple text messages, attempt to fetch latest messages every 2 seconds in the page
@@ -214,17 +214,18 @@ src/
   index.css                 # Tailwind import, theme tokens, dark overrides, logo animation
   App.jsx                   # Core app logic
   api.jsx                   # Functions for reading/modifying the database
-  intro_page.jsx            # Introduction page before logging in
-  login_page.jsx            # User login and create account page
-  homepage.jsx              # Homepage showing the available events
-  event_detail.jsx          # Event detail page
-  schedule.jsx              # Personal schedule (joined events) page
-  messages_popup.jsx        # Popup view for direct messages
-  account_profile.jsx       # Current user profile + account settings popup
+  pages/
+    intro_page.jsx          # Introduction page before logging in
+    login_page.jsx          # User login and create account page
+    homepage.jsx            # Homepage showing the available events
+    event_detail.jsx        # Event detail page
+    schedule.jsx            # Personal schedule (joined events) page
+    account_profile.jsx     # Current user profile + account settings popup
   components/
     EventCard.jsx           # event item in homepage & account profile display
     Logo.jsx                # SVG tennis racket logo with wind trails
     menu_bar.jsx            # Top menu bar
+    messages_popup.jsx      # Popup view for direct messages
 ```
 
 # Appearance and design
