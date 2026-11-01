@@ -20,14 +20,14 @@ The platform is open to any campus event: study sessions, club meetings, open mi
 
 ### Create account page
 
-- Each user's UID is assigned based on its UID in Supabase, converted to a 64-bit number
-    - Displayed on the create account page
+- Text field to enter email address
+    - (The email must not be used by another user)
 - Text field to enter full name
 - 2 password text fields (second one for confirmation)
 
 ### Login page
 
-- Prompt for the UID and password
+- Prompt for the email and password
 - If user is deleted (`is_active` is false), display an error message saying so
 - Use session token (keep login state until manually logged out)
 
@@ -40,10 +40,12 @@ The platform is open to any campus event: study sessions, club meetings, open mi
 
 ### Detail page
 
-- Each post includes a picture, title, description, and the start/end date of the event with the organizer (account) of it
+- Each post includes a picture, title, description & location, category, and the start/end date of the event with the organizer (account) of it
+    - If picture not present, use a placeholder glyph instead
 - "Join event" button with a display of how many people already joined/subscribed
 - Comments with replies
 - "Direct message" button to contact the organizer
+- If viewing as the event creator, a button that opens an "edit event" page allowing for modifications of these fields
 
 ### Personal schedule page
 
@@ -76,15 +78,15 @@ The platform is open to any campus event: study sessions, club meetings, open mi
 ## Database Schema
 
 - Table of users
-    - Name, UID in Supabase, profile picture data
+    - Name, UID (the one in Supabase), profile picture data
     - Authentication handled by Supabase (no password stored)
     - If a user is deleted (`is_active` set to false), it is shown as "Deleted account" in places like comments and direct messages
-    - Backend validation: Picture size ≤ 10MB (convert & compress uploaded file to PNG)
+    - Backend validation: Picture size ≤ 10MB (compress & encode uploaded file to WebP)
     - **Use username: `user@example.com`; password: `password` for testing**
 - Table of event categories
     - Category ID, name
 - Table for events created
-    - Title, picture (encoded in base64 data URL), start & end date, organizer UID, unique event ID, category
+    - Title, picture (encode as WebP at 1080P max), start & end date, organizer UID, unique event ID, category
     - Backend validation: Title ≤ 100 chars; prevent user from choosing end date earlier than start date, etc.
 - Tables for comments under each post (labeled with event ID)
     - Comment content, sender UID, comment ID, replying comment ID, date
@@ -95,7 +97,7 @@ The platform is open to any campus event: study sessions, club meetings, open mi
         - Fetch chat list: Query chats based on UID → Query participant UIDs based on chat ID
     - Use another table for lists of chats (chat ID, UID, user-defined name/label); separate entries for each user
 
-(All date and time values are represented using UNIX timestamps.)
+All date and time values are represented using UNIX timestamps in seconds.
 
 ### SQL Representation
 
@@ -104,9 +106,10 @@ The platform is open to any campus event: study sessions, club meetings, open mi
 CREATE TABLE users(
     uid TEXT PRIMARY KEY, -- Supabase UID
     full_name TEXT NOT NULL,
-    -- Image file encoded in "data:image/<format>;base64,<base64 encoded data>"
+    -- Image file encoded as "data:image/webp;base64,<base64 encoded data>"
     profile_pic_data TEXT,
     is_active BOOLEAN NOT NULL -- Set to false when account is deleted
+    -- (Email and passwords are handled by Supabase)
 );
 
 -- Table of event categories
@@ -122,20 +125,22 @@ CREATE TABLE events(
     create_time BIGINT NOT NULL,
     start_time BIGINT NOT NULL,
     end_time BIGINT,
+    location TEXT,
     organizer_uid TEXT NOT NULL REFERENCES users(uid),
     category_id TEXT REFERENCES event_categories(category_id),
-    -- Image file encoded in "data:image/<format>;base64,<base64 encoded data>"
+    -- Image file encoded as "data:image/webp;base64,<base64 encoded data>"
     picture_data TEXT
 );
 
 -- [Create for each event] (UUID represents event ID)
-CREATE TABLE event_comments_UUID(
+CREATE TABLE event_comments(
     comment_id TEXT PRIMARY KEY,
+    event_id TEXT NOT NULL REFERENCES events(event_id) ON DELETE CASCADE,
     comment_content TEXT NOT NULL,
     comment_time BIGINT NOT NULL,
-    sender_uid TEXT REFERENCES users(uid),
+    sender_uid TEXT NOT NULL REFERENCES users(uid),
     -- All replies are deleted when the main comment is deleted; only reference the main comment
-    replying_to TEXT REFERENCES event_comments_UUID(comment_id) ON DELETE CASCADE
+    replying_to TEXT NOT NULL REFERENCES event_comments_UUID(comment_id) ON DELETE CASCADE
 );
 
 -- Joined events information by user
@@ -150,7 +155,7 @@ CREATE TABLE chats_list(
     chat_id TEXT NOT NULL,
     -- Defaults to event name; each user can set its own name for reference
     chat_name TEXT NOT NULL, 
-    user_id TEXT REFERENCES users(uid),
+    user_id TEXT NOT NULL REFERENCES users(uid),
     CONSTRAINT uc_chat_user UNIQUE (chat_id, user_id)
 );
 
@@ -159,7 +164,7 @@ CREATE TABLE chat_msgs_UUID(
     msg_id TEXT PRIMARY KEY,
     msg_content TEXT NOT NULL,
     msg_time BIGINT NOT NULL,
-    sender_uid TEXT REFERENCES users(uid)
+    sender_uid TEXT NOT NULL REFERENCES users(uid)
 );
 ```
 
@@ -191,8 +196,8 @@ Design appropriate functions for inserting values into the database and fetching
 
 ## Stack
 
-- React 18 (function components and hooks only)
-- Vite 6
+- React 19 (function components and hooks only)
+- Vite 8
 - Tailwind CSS v4 via `@tailwindcss/vite`. There is **no** `tailwind.config.js`; theme tokens live in `src/index.css` under `@theme`.
 - No router, state library, or UI kit. Don't add dependencies unless the task needs them.
 
