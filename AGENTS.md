@@ -11,7 +11,7 @@ Rally is a public event board for college campuses. Students and clubs post even
 - a cover **picture**
 - a **title**
 - a **description**
-- a **start and end** date/time
+- **event date/time** (end time is optional)
 - a location and organizer
 
 The platform is open to any campus event: study sessions, club meetings, open mics, and so on. Others can join/subscribe to the event (with the number of subscribers displayed on the page), comment on the post, or reach out to the organizer directly (e.g. in-platform direct message, contact info).
@@ -82,90 +82,200 @@ The platform is open to any campus event: study sessions, club meetings, open mi
     - Authentication handled by Supabase (no password stored)
     - If a user is deleted (`is_active` set to false), it is shown as "Deleted account" in places like comments and direct messages
     - Backend validation: Picture size ≤ 10MB (compress & encode uploaded file to WebP)
-    - **Use username: `user@example.com`; password: `password` for testing**
 - Table of event categories
     - Category ID, name
 - Table for events created
-    - Title, picture (encode as WebP at 1080P max), start & end date, organizer UID, unique event ID, category
+    - Title, picture (encode as WebP at 1920x1080 max), start & end date, organizer UID, unique event ID, category
     - Backend validation: Title ≤ 100 chars; prevent user from choosing end date earlier than start date, etc.
-- Tables for comments under each post (labeled with event ID)
+- Table for comments
+    - Each entry contains the event ID which the comment belongs to
     - Comment content, sender UID, comment ID, replying comment ID, date
 - Table for "joined events" information
     - Event ID and UID for each user joined
 - Tables for direct messages
-    - Create individual tables for each chat (message ID, message content, date, sender) labeled with chat ID
+    - Create table for chat messages (message ID, message content, date, sender) labeled with its belonging chat ID
         - Fetch chat list: Query chats based on UID → Query participant UIDs based on chat ID
     - Use another table for lists of chats (chat ID, UID, user-defined name/label); separate entries for each user
 
-All date and time values are represented using UNIX timestamps in seconds.
+All date and time values are represented using UNIX timestamps in seconds. Use a separate library to encode uploaded picture as WebP to support Safari.
 
 ### SQL Representation
 
 ```sql
+-- Image columns hold "data:image/webp;base64,<base64 encoded data>".
+-- Max length 13981039 = 23-char prefix + base64 of 10 MiB (4 * ceil(10485760 / 3)).
+
 -- Table of users
 CREATE TABLE users(
     uid TEXT PRIMARY KEY, -- Supabase UID
-    full_name TEXT NOT NULL,
-    -- Image file encoded as "data:image/webp;base64,<base64 encoded data>"
-    profile_pic_data TEXT,
-    is_active BOOLEAN NOT NULL -- Set to false when account is deleted
+    full_name TEXT NOT NULL CHECK (char_length(btrim(full_name)) BETWEEN 1 AND 100),
+    profile_pic_data TEXT CHECK (
+        profile_pic_data LIKE 'data:image/webp;base64,%'
+        AND octet_length(profile_pic_data) <= 13981039
+    ),
+    is_active BOOLEAN NOT NULL DEFAULT true -- Set to false when account is deleted
     -- (Email and passwords are handled by Supabase)
 );
 
 -- Table of event categories
 CREATE TABLE event_categories(
     category_id TEXT PRIMARY KEY,
-    name TEXT NOT NULL
+    name TEXT NOT NULL CHECK (char_length(btrim(name)) BETWEEN 1 AND 50)
 );
+
 -- Table of events created
 CREATE TABLE events(
-    event_id TEXT PRIMARY KEY,
-    event_title TEXT NOT NULL,
-    event_description TEXT,
-    create_time BIGINT NOT NULL,
-    start_time BIGINT NOT NULL,
+    event_id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+    event_title TEXT NOT NULL CHECK (char_length(btrim(event_title)) BETWEEN 1 AND 100),
+    event_description TEXT CHECK (char_length(event_description) <= 5000),
+    create_time BIGINT NOT NULL DEFAULT extract(epoch FROM now())::bigint,
+    start_time BIGINT NOT NULL CHECK (start_time > 0),
     end_time BIGINT,
-    location TEXT,
+    location TEXT CHECK (char_length(location) <= 200),
     organizer_uid TEXT NOT NULL REFERENCES users(uid),
     category_id TEXT REFERENCES event_categories(category_id),
-    -- Image file encoded as "data:image/webp;base64,<base64 encoded data>"
-    picture_data TEXT
+    picture_data TEXT CHECK (
+        picture_data LIKE 'data:image/webp;base64,%'
+        AND octet_length(picture_data) <= 13981039
+    ),
+    CONSTRAINT chk_event_times CHECK (end_time IS NULL OR end_time >= start_time)
 );
 
--- [Create for each event] (UUID represents event ID)
+-- Event comments table
 CREATE TABLE event_comments(
-    comment_id TEXT PRIMARY KEY,
+    comment_id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
     event_id TEXT NOT NULL REFERENCES events(event_id) ON DELETE CASCADE,
-    comment_content TEXT NOT NULL,
-    comment_time BIGINT NOT NULL,
+    comment_content TEXT NOT NULL CHECK (char_length(btrim(comment_content)) BETWEEN 1 AND 2000),
+    comment_time BIGINT NOT NULL DEFAULT extract(epoch FROM now())::bigint,
     sender_uid TEXT NOT NULL REFERENCES users(uid),
-    -- All replies are deleted when the main comment is deleted; only reference the main comment
-    replying_to TEXT NOT NULL REFERENCES event_comments_UUID(comment_id) ON DELETE CASCADE
+    -- NULL for main comments; replies only reference the main comment (see trigger below)
+    replying_to TEXT,
+    CONSTRAINT uc_comment_event UNIQUE (comment_id, event_id),
+    -- Replies must be on the same event as their main comment, and are deleted with it
+    CONSTRAINT fk_reply_parent FOREIGN KEY (replying_to, event_id)
+        REFERENCES event_comments(comment_id, event_id) ON DELETE CASCADE,
+    CONSTRAINT chk_not_self_reply CHECK (replying_to <> comment_id)
 );
 
--- Joined events information by user
+-- Reject replies to replies (keeps threads one level deep)
+CREATE FUNCTION check_reply_target() RETURNS trigger
+LANGUAGE plpgsql SET search_path = public AS $$
+BEGIN
+    IF NEW.replying_to IS NOT NULL AND EXISTS (
+        SELECT 1 FROM event_comments
+        WHERE comment_id = NEW.replying_to AND replying_to IS NOT NULL
+    ) THEN
+        RAISE EXCEPTION 'Replies must reference a main comment';
+    END IF;
+    RETURN NEW;
+END $$;
+
+CREATE TRIGGER trg_check_reply_target BEFORE INSERT OR UPDATE ON event_comments
+    FOR EACH ROW EXECUTE FUNCTION check_reply_target();
+
+-- Joined events information (create rows for each user)
 CREATE TABLE joined_events(
-    event_id TEXT NOT NULL,
+    event_id TEXT NOT NULL REFERENCES events(event_id) ON DELETE CASCADE,
     joiner_uid TEXT NOT NULL REFERENCES users(uid),
     CONSTRAINT uc_event_joiner UNIQUE (event_id, joiner_uid)
 );
 
--- Chats list information by user
+-- Chats list information (create rows for each user)
 CREATE TABLE chats_list(
     chat_id TEXT NOT NULL,
     -- Defaults to event name; each user can set its own name for reference
-    chat_name TEXT NOT NULL, 
+    chat_name TEXT NOT NULL CHECK (char_length(btrim(chat_name)) BETWEEN 1 AND 100),
     user_id TEXT NOT NULL REFERENCES users(uid),
     CONSTRAINT uc_chat_user UNIQUE (chat_id, user_id)
 );
 
--- [Create for each chat] (UUID represents chat ID)
-CREATE TABLE chat_msgs_UUID(
-    msg_id TEXT PRIMARY KEY,
-    msg_content TEXT NOT NULL,
-    msg_time BIGINT NOT NULL,
+-- Chat messages table
+CREATE TABLE chat_msgs(
+    msg_id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+    chat_id TEXT NOT NULL, -- Foreign key not used since primary key not used in chats_list (by user instead of by chat)
+    msg_content TEXT NOT NULL CHECK (char_length(btrim(msg_content)) BETWEEN 1 AND 2000),
+    msg_time BIGINT NOT NULL DEFAULT extract(epoch FROM now())::bigint,
     sender_uid TEXT NOT NULL REFERENCES users(uid)
 );
+
+-- Indexes for common lookups
+CREATE INDEX idx_events_start_time ON events(start_time);
+CREATE INDEX idx_events_organizer ON events(organizer_uid);
+CREATE INDEX idx_comments_event ON event_comments(event_id, comment_time);
+CREATE INDEX idx_joined_joiner ON joined_events(joiner_uid);
+CREATE INDEX idx_chats_user ON chats_list(user_id);
+CREATE INDEX idx_msgs_chat ON chat_msgs(chat_id, msg_time);
+
+-- Default event categories
+INSERT INTO event_categories(category_id, name) VALUES
+    ('sports', 'Sports'),
+    ('academic', 'Academic'),
+    ('arts', 'Arts & Entertainment'),
+    ('clubs', 'Clubs'),
+    ('social', 'Social'),
+    ('career', 'Career');
+```
+
+### Row-level security
+
+Signed-in users can read shared data; users can only write rows that belong to them. Chats are only visible to their members.
+
+```sql
+ALTER TABLE users ENABLE ROW LEVEL SECURITY;
+ALTER TABLE event_categories ENABLE ROW LEVEL SECURITY;
+ALTER TABLE events ENABLE ROW LEVEL SECURITY;
+ALTER TABLE event_comments ENABLE ROW LEVEL SECURITY;
+ALTER TABLE joined_events ENABLE ROW LEVEL SECURITY;
+ALTER TABLE chats_list ENABLE ROW LEVEL SECURITY;
+ALTER TABLE chat_msgs ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY users_read ON users FOR SELECT TO authenticated USING (true);
+CREATE POLICY users_insert_own ON users FOR INSERT TO authenticated
+    WITH CHECK (uid = (SELECT auth.uid())::text);
+CREATE POLICY users_update_own ON users FOR UPDATE TO authenticated
+    USING (uid = (SELECT auth.uid())::text) WITH CHECK (uid = (SELECT auth.uid())::text);
+
+CREATE POLICY categories_read ON event_categories FOR SELECT TO authenticated USING (true);
+
+CREATE POLICY events_read ON events FOR SELECT TO authenticated USING (true);
+CREATE POLICY events_write_own ON events FOR ALL TO authenticated
+    USING (organizer_uid = (SELECT auth.uid())::text)
+    WITH CHECK (organizer_uid = (SELECT auth.uid())::text);
+
+CREATE POLICY comments_read ON event_comments FOR SELECT TO authenticated USING (true);
+CREATE POLICY comments_write_own ON event_comments FOR ALL TO authenticated
+    USING (sender_uid = (SELECT auth.uid())::text)
+    WITH CHECK (sender_uid = (SELECT auth.uid())::text);
+
+-- Everyone can read joins (needed for joiner counts)
+CREATE POLICY joined_read ON joined_events FOR SELECT TO authenticated USING (true);
+CREATE POLICY joined_write_own ON joined_events FOR ALL TO authenticated
+    USING (joiner_uid = (SELECT auth.uid())::text)
+    WITH CHECK (joiner_uid = (SELECT auth.uid())::text);
+
+-- SECURITY DEFINER so chat policies can check membership without recursing into chats_list RLS
+CREATE FUNCTION is_chat_member(target_chat TEXT) RETURNS boolean
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
+    SELECT EXISTS (
+        SELECT 1 FROM chats_list
+        WHERE chat_id = target_chat AND user_id = (SELECT auth.uid())::text
+    );
+$$;
+
+CREATE POLICY chats_read ON chats_list FOR SELECT TO authenticated
+    USING (is_chat_member(chat_id));
+-- Add your own row first, then rows for the other participants
+CREATE POLICY chats_insert ON chats_list FOR INSERT TO authenticated
+    WITH CHECK (user_id = (SELECT auth.uid())::text OR is_chat_member(chat_id));
+CREATE POLICY chats_update_own ON chats_list FOR UPDATE TO authenticated
+    USING (user_id = (SELECT auth.uid())::text) WITH CHECK (user_id = (SELECT auth.uid())::text);
+CREATE POLICY chats_delete_own ON chats_list FOR DELETE TO authenticated
+    USING (user_id = (SELECT auth.uid())::text);
+
+CREATE POLICY msgs_read ON chat_msgs FOR SELECT TO authenticated
+    USING (is_chat_member(chat_id));
+CREATE POLICY msgs_insert ON chat_msgs FOR INSERT TO authenticated
+    WITH CHECK (sender_uid = (SELECT auth.uid())::text AND is_chat_member(chat_id));
 ```
 
 ### Example commands for fetching records
@@ -181,13 +291,22 @@ SELECT COUNT(joiner_uid) FROM joined_events WHERE event_id=<id>;
 SELECT event_id FROM joined_events WHERE joiner_uid=<id>;
 
 -- Fetch comments for an event post
-SELECT * FROM event_comments_<Event ID>;
+SELECT * FROM event_comments WHERE event_id=<id> ORDER BY comment_time;
 
 -- Fetch list of chats for a user
 SELECT chat_id, chat_name FROM chats_list WHERE user_id=<id>;
 
 -- Fetch message list
-SELECT * FROM chat_msgs_<Chat ID>;
+SELECT * FROM chat_msgs WHERE chat_id=<id> ORDER BY msg_time;
+```
+
+## Testing
+
+Use username: `user@example.com`; password: `password` for interface testing.
+
+```sql
+INSERT INTO users(uid, full_name, is_active) 
+VALUES ('dad2b8f3-0f35-4d51-abde-4f6eed729975', 'Example user 1', true);
 ```
 
 ## Data functions
@@ -225,6 +344,7 @@ src/
     login_page.jsx          # User login and create account page
     homepage.jsx            # Homepage showing the available events
     event_detail.jsx        # Event detail page
+    edit_event.jsx          # Edit event page
     schedule.jsx            # Personal schedule (joined events) page
     account_profile.jsx     # Current user profile + account settings popup
   components/
