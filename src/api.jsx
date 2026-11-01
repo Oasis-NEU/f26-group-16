@@ -4,14 +4,15 @@
 //
 // Times are stored as UNIX timestamps in seconds (BIGINT columns).
 //
-// Not here yet: comments (event_comments) and direct messages (chats_list,
-// chat_msgs). Add them alongside the detail page and the messages popup.
+// Not here yet: direct messages (chats_list, chat_msgs). Add them alongside
+// the messages popup.
 
 import { supabase } from './utils/supabase.js'
 
 export const TITLE_MAX = 100
 export const DESCRIPTION_MAX = 5000
 export const LOCATION_MAX = 200
+export const COMMENT_MAX = 2000
 export const IMAGE_MAX_BYTES = 10 * 1024 * 1024
 
 // Pictures are stored as WebP data URLs. The length limit matches the CHECK
@@ -23,6 +24,13 @@ const nowSeconds = () => Math.floor(Date.now() / 1000)
 
 // Columns the app reads from `users`.
 const USER_COLUMNS = 'uid, full_name, profile_pic_data, is_active'
+
+// Event rows come with `organizer` ({ uid, full_name, is_active }) and
+// `category` ({ category_id, name }, or null) attached.
+const EVENT_COLUMNS = '*, organizer:users(uid, full_name, is_active), category:event_categories(category_id, name)'
+
+// Comment rows come with `sender` ({ uid, full_name, is_active }) attached.
+const COMMENT_COLUMNS = '*, sender:users(uid, full_name, is_active)'
 
 function check(condition, message) {
   if (!condition) throw new Error(message)
@@ -180,23 +188,24 @@ export async function listCategories() {
 
 // ---------- events ----------
 
-// Filters are optional: categoryId, and a [from, to] window on start_time.
+// Soonest first. Filters are optional: categoryId, and a [from, to] window on
+// start_time.
 export async function listEvents({ categoryId, from, to } = {}) {
-  let query = supabase.from('events').select('*')
+  let query = supabase.from('events').select(EVENT_COLUMNS)
   if (categoryId) query = query.eq('category_id', categoryId)
   if (from != null) query = query.gte('start_time', from)
   if (to != null) query = query.lte('start_time', to)
-  return unwrap(await query.order('start_time', { ascending: false }))
+  return unwrap(await query.order('start_time', { ascending: true }))
 }
 
 export async function listEventsByOrganizer(uid) {
   return unwrap(
-    await supabase.from('events').select('*').eq('organizer_uid', uid).order('start_time', { ascending: false }),
+    await supabase.from('events').select(EVENT_COLUMNS).eq('organizer_uid', uid).order('start_time', { ascending: false }),
   )
 }
 
 export async function getEvent(eventId) {
-  return unwrap(await supabase.from('events').select('*').eq('event_id', eventId).maybeSingle())
+  return unwrap(await supabase.from('events').select(EVENT_COLUMNS).eq('event_id', eventId).maybeSingle())
 }
 
 export async function createEvent({ title, description, location, startTime, endTime, organizerUid, categoryId, pictureData }) {
@@ -214,7 +223,7 @@ export async function createEvent({ title, description, location, startTime, end
     category_id: categoryId || null,
     picture_data: pictureData ?? null,
   }
-  return unwrap(await supabase.from('events').insert(row).select().single())
+  return unwrap(await supabase.from('events').insert(row).select(EVENT_COLUMNS).single())
 }
 
 // Only the fields passed in `changes` are updated.
@@ -239,7 +248,7 @@ export async function updateEvent(eventId, changes) {
     picture_data: merged.pictureData,
   }
   if (changes.categoryId !== undefined) row.category_id = changes.categoryId || null
-  return unwrap(await supabase.from('events').update(row).eq('event_id', eventId).select().single())
+  return unwrap(await supabase.from('events').update(row).eq('event_id', eventId).select(EVENT_COLUMNS).single())
 }
 
 // The event's comments and joins are removed by ON DELETE CASCADE.
@@ -280,5 +289,38 @@ export async function listJoinedEvents(uid) {
   const rows = unwrap(await supabase.from('joined_events').select('event_id').eq('joiner_uid', uid))
   if (rows.length === 0) return []
   const ids = rows.map((row) => row.event_id)
-  return unwrap(await supabase.from('events').select('*').in('event_id', ids).order('start_time', { ascending: true }))
+  return unwrap(
+    await supabase.from('events').select(EVENT_COLUMNS).in('event_id', ids).order('start_time', { ascending: true }),
+  )
+}
+
+// ---------- comments ----------
+
+// Oldest first. Replies have `replying_to` set to their main comment's id.
+export async function listComments(eventId) {
+  return unwrap(
+    await supabase
+      .from('event_comments')
+      .select(COMMENT_COLUMNS)
+      .eq('event_id', eventId)
+      .order('comment_time', { ascending: true }),
+  )
+}
+
+// `replyingTo` must be a main comment's id: replies stay one level deep, so a
+// reply to a reply goes on the main comment instead.
+export async function addComment({ eventId, senderUid, content, replyingTo = null }) {
+  const text = content?.trim() ?? ''
+  check(text, 'Write something first.')
+  check(text.length <= COMMENT_MAX, `Comments must be ${COMMENT_MAX} characters or less.`)
+  check(senderUid, 'Sender is required.')
+  const row = {
+    comment_id: crypto.randomUUID(),
+    event_id: eventId,
+    comment_content: text,
+    comment_time: nowSeconds(),
+    sender_uid: senderUid,
+    replying_to: replyingTo,
+  }
+  return unwrap(await supabase.from('event_comments').insert(row).select(COMMENT_COLUMNS).single())
 }

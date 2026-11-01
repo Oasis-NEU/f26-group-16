@@ -1,8 +1,7 @@
 import { useId, useState } from 'react'
 import { PASSWORD_MIN, logIn, signUp } from '../api.jsx'
+import { ErrorMessage, inputClass } from '../components/ui.jsx'
 
-const inputClass =
-  'w-full rounded-xl border border-line bg-surface px-4 py-3 text-ink placeholder:text-muted focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-100'
 const primaryButton =
   'w-full rounded-xl bg-brand-500 px-6 py-3 font-semibold text-white shadow-md hover:bg-brand-600 disabled:cursor-not-allowed disabled:opacity-60'
 
@@ -39,15 +38,6 @@ function Field({ label, hint, type = 'text', ...inputProps }) {
       </div>
       {hint && <p className="mt-1.5 text-xs text-muted">{hint}</p>}
     </div>
-  )
-}
-
-function ErrorMessage({ message }) {
-  if (!message) return null
-  return (
-    <p role="alert" className="rounded-xl bg-danger-50 px-4 py-3 text-sm text-danger">
-      {message}
-    </p>
   )
 }
 

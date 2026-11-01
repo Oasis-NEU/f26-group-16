@@ -37,6 +37,7 @@ The platform is open to any campus event: study sessions, club meetings, open mi
 - The home page lists the available events in a grid view, detailing the picture, title, date, and organizer (account) of the event
 - The user can choose different categories (e.g. sport, entertainment) to filter events
     - Additional filters like date range
+- "Post an event" button that opens the edit event page in create mode (same form, empty)
 
 ### Detail page
 
@@ -356,6 +357,8 @@ SELECT * FROM chat_msgs WHERE chat_id=<id> ORDER BY msg_time;
 
 Use username: `user@example.com`; password: `password` for interface testing.
 
+To fill an empty database with example events (posted by the test user, some with pictures, comments, and joins), run `node --env-file=.env scripts/seed_events.mjs`. It skips events that already exist, so running it twice is safe.
+
 ## Data functions
 
 Design appropriate functions for inserting values into the database and fetching records based on the example above (perform SQL queries on the Supabase server). Put them into a separate file (e.g. `src/api.jsx`) for organization and clarity. Implement relevant data validation and checks (e.g. title length, required fields, end_time >= start_time, image size/type limits) to prevent bad data from being written.
@@ -396,22 +399,47 @@ index.html                  # page shell + inline script that applies dark mode 
 src/
   main.jsx                  # React entry
   index.css                 # Tailwind import, theme tokens, dark overrides, logo animation
-  App.jsx                   # Core app logic
+  App.jsx                   # Core app logic: session check, menu bar, page for the current route
   api.jsx                   # Functions for reading/modifying the database
   pages/
     intro_page.jsx          # Introduction page before logging in
     login_page.jsx          # User login and create account page
     homepage.jsx            # Homepage showing the available events
     event_detail.jsx        # Event detail page
-    edit_event.jsx          # Edit event page
+    edit_event.jsx          # Edit event page (also creates new events)
     schedule.jsx            # Personal schedule (joined events) page
     account_profile.jsx     # Current user profile + account settings popup
   components/
     EventCard.jsx           # event item in homepage & account profile display
+    EventPicture.jsx        # event picture, or the category glyph when there is none
     Logo.jsx                # SVG tennis racket logo with wind trails
     menu_bar.jsx            # Top menu bar
     messages_popup.jsx      # Popup view for direct messages
+    ui.jsx                  # shared button/input styles, ErrorMessage, Notice
+  utils/
+    supabase.js             # Supabase client (only api.jsx imports it)
+    routes.js               # hash routes: path builders, useRoute(), navigate()
+    format.js               # dates, "Deleted account" names, category glyphs
+scripts/
+  seed_events.mjs           # example events for testing
+  seed_images/              # WebP pictures for the example events (credits in CREDITS.md)
 ```
+
+### Routes
+
+There's no router library. Pages are picked from the URL hash in `App.jsx`, and links use the builders in `src/utils/routes.js` (e.g. `<a href={eventPath(id)}>`) instead of writing hashes by hand.
+
+| Hash | Page |
+|---|---|
+| `#/` | Homepage |
+| `#/event/new` | Edit event page, create mode |
+| `#/event/<event_id>` | Detail page |
+| `#/event/<event_id>/edit` | Edit event page |
+| `#/schedule` | Personal schedule |
+| `#/profile` | Your profile |
+| `#/profile/<uid>` | Someone else's profile |
+
+Schedule and profile show a "coming soon" placeholder in `App.jsx` until their pages exist. Replace the placeholder in `currentPage()` when you build them.
 
 # Appearance and design
 
