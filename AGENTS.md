@@ -80,6 +80,7 @@ The platform is open to any campus event: study sessions, club meetings, open mi
 - Table of users
     - Name, UID (the one in Supabase), profile picture data
     - Authentication handled by Supabase (no password stored)
+    - The row is created by a database trigger on sign-up (see [Supabase Auth](#supabase-auth)), so an account can't exist in Supabase Auth without a `users` row
     - If a user is deleted (`is_active` set to false), it is shown as "Deleted account" in places like comments and direct messages
     - Backend validation: Picture size ≤ 10MB (compress & encode uploaded file to WebP)
 - Table of event categories
@@ -278,6 +279,41 @@ CREATE POLICY msgs_insert ON chat_msgs FOR INSERT TO authenticated
     WITH CHECK (sender_uid = (SELECT auth.uid())::text AND is_chat_member(chat_id));
 ```
 
+### Supabase Auth
+
+Users sign up and log in with their email and password through Supabase Auth. `users.uid` is the Supabase Auth user id, so the RLS rules above can compare it with `auth.uid()`.
+
+Dashboard setting (Authentication → Sign In / Providers → **Email**):
+
+- Email provider: **on**
+- Confirm email: **off for now**. Supabase's built-in email service only delivers to members of the Supabase project and sends just a few emails per hour. Turn it back on once a custom SMTP sender is set up (Authentication → Emails → SMTP Settings). The app handles both: with it on, sign-up shows "Check your inbox".
+
+Sign-up trigger: creates the `users` row when someone signs up. `full_name` comes from the sign-up form's metadata.
+
+```sql
+CREATE OR REPLACE FUNCTION public.handle_new_user()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER SET search_path = ''
+AS $$
+BEGIN
+  IF coalesce(trim(new.raw_user_meta_data->>'full_name'), '') = '' THEN
+    RAISE EXCEPTION 'full_name is required';
+  END IF;
+
+  INSERT INTO public.users (uid, full_name, is_active)
+  VALUES (new.id::text, trim(new.raw_user_meta_data->>'full_name'), true);
+  RETURN new;
+END;
+$$;
+
+CREATE TRIGGER on_auth_user_created
+  AFTER INSERT ON auth.users
+  FOR EACH ROW EXECUTE FUNCTION public.handle_new_user();
+```
+
+Migration steps from the first auth version and troubleshooting are in `docs/auth-setup.md`.
+
 ### Example commands for fetching records
 
 ```sql
@@ -307,6 +343,18 @@ Use username: `user@example.com`; password: `password` for interface testing.
 ## Data functions
 
 Design appropriate functions for inserting values into the database and fetching records based on the example above (perform SQL queries on the Supabase server). Put them into a separate file (e.g. `src/api.jsx`) for organization and clarity. Implement relevant data validation and checks (e.g. title length, required fields, end_time >= start_time, image size/type limits) to prevent bad data from being written.
+
+Auth functions in `src/api.jsx`:
+
+| Function | What it does |
+|---|---|
+| `signUp({ email, fullName, password, confirmPassword })` | Validates, then creates the account. The sign-up trigger creates the `users` row. |
+| `logIn(email, password)` | Logs in. The session is saved in the browser until logout. |
+| `logOut()` | Logs out (for the account settings popup) |
+| `onSessionChange(callback)` | Lets `App.jsx` switch between the login page and the app |
+| `getProfile(authId)` | The `users` row for the logged-in account (`uid` = `authId`) |
+
+If `is_active` is false, `App.jsx` logs the user straight back out and shows "This account has been deleted."
 
 ## Stack
 
