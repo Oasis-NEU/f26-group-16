@@ -80,6 +80,7 @@ The platform is open to any campus event: study sessions, club meetings, open mi
     - Authentication handled by Supabase (no password stored)
     - If a user is deleted (`is_active` set to false), it is shown as "Deleted account" in places like comments and direct messages
     - Backend validation: Picture size ≤ 10MB (convert & compress uploaded file to PNG)
+    - **Use username: `user@example.com`; password: `password` for testing**
 - Table of event categories
     - Category ID, name
 - Table for events created
