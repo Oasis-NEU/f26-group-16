@@ -4,17 +4,24 @@
 //
 // Times are stored as UNIX timestamps in seconds (BIGINT columns).
 //
-// Not here yet: comments and direct messages (the schema uses one table per
-// event/chat, which the browser client can't create; needs a team decision).
+// Not here yet: comments (event_comments) and direct messages (chats_list,
+// chat_msgs). Add them alongside the detail page and the messages popup.
 
 import { supabase } from './utils/supabase.js'
 
 export const TITLE_MAX = 100
+export const DESCRIPTION_MAX = 5000
+export const LOCATION_MAX = 200
 export const IMAGE_MAX_BYTES = 10 * 1024 * 1024
+
+// Pictures are stored as WebP data URLs. The length limit matches the CHECK
+// rule on picture columns: the prefix plus the base64 of 10 MiB.
+const WEBP_PREFIX = 'data:image/webp;base64,'
+const IMAGE_DATA_URL_MAX = WEBP_PREFIX.length + 4 * Math.ceil(IMAGE_MAX_BYTES / 3)
 
 const nowSeconds = () => Math.floor(Date.now() / 1000)
 
-// Columns that are safe to send to the browser (never pwd_hash).
+// Columns the app reads from `users`.
 const USER_COLUMNS = 'uid, full_name, profile_pic_data, is_active'
 
 function check(condition, message) {
@@ -36,9 +43,11 @@ function unwrap({ data, error }) {
 
 // ---------- validation ----------
 
-export function validateEvent({ title, startTime, endTime, pictureData }) {
+export function validateEvent({ title, description, location, startTime, endTime, pictureData }) {
   check(typeof title === 'string' && title.trim().length > 0, 'Title is required.')
   check(title.trim().length <= TITLE_MAX, `Title must be ${TITLE_MAX} characters or less.`)
+  check(!description || description.trim().length <= DESCRIPTION_MAX, `Description must be ${DESCRIPTION_MAX} characters or less.`)
+  check(!location || location.trim().length <= LOCATION_MAX, `Location must be ${LOCATION_MAX} characters or less.`)
   check(Number.isInteger(startTime), 'Start time is required.')
   if (endTime != null) {
     check(Number.isInteger(endTime), 'End time must be a UNIX timestamp.')
@@ -48,22 +57,51 @@ export function validateEvent({ title, startTime, endTime, pictureData }) {
 }
 
 export function validateImageDataUrl(dataUrl) {
-  const match = /^data:image\/[\w.+-]+;base64,(.*)$/.exec(dataUrl ?? '')
-  check(match, 'Picture must be an image.')
-  // Decoded size of a base64 string is about 3/4 of its length.
-  check(match[1].length * 0.75 <= IMAGE_MAX_BYTES, 'Picture must be 10MB or smaller.')
+  check(typeof dataUrl === 'string' && dataUrl.startsWith(WEBP_PREFIX), 'Picture must be a WebP image.')
+  check(dataUrl.length <= IMAGE_DATA_URL_MAX, 'Picture must be 10MB or smaller.')
 }
 
-// Turns an <input type="file"> File into a data URL after checking type and size.
-export function fileToDataUrl(file) {
-  check(file?.type?.startsWith('image/'), 'Picture must be an image.')
-  check(file.size <= IMAGE_MAX_BYTES, 'Picture must be 10MB or smaller.')
+function blobToDataUrl(blob) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader()
     reader.onload = () => resolve(reader.result)
     reader.onerror = () => reject(new Error('Couldn’t read the picture.'))
-    reader.readAsDataURL(file)
+    reader.readAsDataURL(blob)
   })
+}
+
+// Turns an <input type="file"> File into a WebP data URL, scaled down to fit
+// maxWidth x maxHeight (1920x1080 for event pictures). Safari's canvas can't
+// export WebP, so encoding uses @jsquash/webp, loaded on first use to keep it
+// out of the main bundle.
+export async function fileToDataUrl(file, { maxWidth = 1920, maxHeight = 1080, quality = 80 } = {}) {
+  check(file?.type?.startsWith('image/'), 'Picture must be an image.')
+  let bitmap
+  try {
+    bitmap = await createImageBitmap(file)
+  } catch {
+    throw new Error('Couldn’t read the picture. Try a JPEG, PNG, or WebP file.')
+  }
+  const scale = Math.min(1, maxWidth / bitmap.width, maxHeight / bitmap.height)
+  const width = Math.max(1, Math.round(bitmap.width * scale))
+  const height = Math.max(1, Math.round(bitmap.height * scale))
+  const canvas = document.createElement('canvas')
+  canvas.width = width
+  canvas.height = height
+  const context = canvas.getContext('2d')
+  context.drawImage(bitmap, 0, 0, width, height)
+  bitmap.close()
+
+  let webp
+  try {
+    const { encode } = await import('@jsquash/webp')
+    webp = await encode(context.getImageData(0, 0, width, height), { quality })
+  } catch {
+    throw new Error('Couldn’t convert the picture. Check your internet and try again.')
+  }
+  const dataUrl = await blobToDataUrl(new Blob([webp], { type: 'image/webp' }))
+  validateImageDataUrl(dataUrl)
+  return dataUrl
 }
 
 // ---------- auth ----------
@@ -161,8 +199,8 @@ export async function getEvent(eventId) {
   return unwrap(await supabase.from('events').select('*').eq('event_id', eventId).maybeSingle())
 }
 
-export async function createEvent({ title, description, startTime, endTime, organizerUid, categoryId, pictureData }) {
-  validateEvent({ title, startTime, endTime, pictureData })
+export async function createEvent({ title, description, location, startTime, endTime, organizerUid, categoryId, pictureData }) {
+  validateEvent({ title, description, location, startTime, endTime, pictureData })
   check(organizerUid, 'Organizer is required.')
   const row = {
     event_id: crypto.randomUUID(),
@@ -171,6 +209,7 @@ export async function createEvent({ title, description, startTime, endTime, orga
     create_time: nowSeconds(),
     start_time: startTime,
     end_time: endTime ?? null,
+    location: location?.trim() || null,
     organizer_uid: organizerUid,
     category_id: categoryId || null,
     picture_data: pictureData ?? null,
@@ -184,6 +223,8 @@ export async function updateEvent(eventId, changes) {
   check(current, 'Event not found.')
   const merged = {
     title: changes.title ?? current.event_title,
+    description: changes.description !== undefined ? changes.description : current.event_description,
+    location: changes.location !== undefined ? changes.location : current.location,
     startTime: changes.startTime ?? current.start_time,
     endTime: changes.endTime !== undefined ? changes.endTime : current.end_time,
     pictureData: changes.pictureData !== undefined ? changes.pictureData : current.picture_data,
@@ -191,18 +232,18 @@ export async function updateEvent(eventId, changes) {
   validateEvent(merged)
   const row = {
     event_title: merged.title.trim(),
+    event_description: merged.description?.trim() || null,
+    location: merged.location?.trim() || null,
     start_time: merged.startTime,
     end_time: merged.endTime,
     picture_data: merged.pictureData,
   }
-  if (changes.description !== undefined) row.event_description = changes.description?.trim() || null
   if (changes.categoryId !== undefined) row.category_id = changes.categoryId || null
   return unwrap(await supabase.from('events').update(row).eq('event_id', eventId).select().single())
 }
 
-// joined_events has no foreign key to events, so clear its rows first.
+// The event's comments and joins are removed by ON DELETE CASCADE.
 export async function deleteEvent(eventId) {
-  unwrap(await supabase.from('joined_events').delete().eq('event_id', eventId))
   unwrap(await supabase.from('events').delete().eq('event_id', eventId))
 }
 
