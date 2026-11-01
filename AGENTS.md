@@ -82,7 +82,6 @@ The platform is open to any campus event: study sessions, club meetings, open mi
     - Authentication handled by Supabase (no password stored)
     - If a user is deleted (`is_active` set to false), it is shown as "Deleted account" in places like comments and direct messages
     - Backend validation: Picture size ≤ 10MB (compress & encode uploaded file to WebP)
-    - **Use username: `user@example.com`; password: `password` for testing**
 - Table of event categories
     - Category ID, name
 - Table for events created
@@ -189,6 +188,15 @@ SELECT chat_id, chat_name FROM chats_list WHERE user_id=<id>;
 
 -- Fetch message list
 SELECT * FROM chat_msgs_<Chat ID>;
+```
+
+## Testing
+
+Use username: `user@example.com`; password: `password` for interface testing.
+
+```sql
+INSERT INTO users(uid, full_name, is_active) 
+VALUES ('dad2b8f3-0f35-4d51-abde-4f6eed729975', 'Example user 1', true)
 ```
 
 ## Data functions
