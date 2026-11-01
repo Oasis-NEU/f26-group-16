@@ -20,7 +20,7 @@ The platform is open to any campus event: study sessions, club meetings, open mi
 
 ### Create account page
 
-- Each user is randomly assigned a 10-digit UID which serves as the username
+- Each user's UID is assigned based on its UID in Supabase, converted to a 64-bit number
     - Displayed on the create account page
 - Text field to enter full name
 - 2 password text fields (second one for confirmation)
@@ -76,8 +76,9 @@ The platform is open to any campus event: study sessions, club meetings, open mi
 ## Database Schema
 
 - Table of users
-    - Name, SHA-256 hashed password, 10-digit UID, profile picture data
-    - If a user is deleted (`is_active` set to false), it is shown as "Deleted account" in comments and direct messages
+    - Name, UID in Supabase, profile picture data
+    - Authentication handled by Supabase (no password stored)
+    - If a user is deleted (`is_active` set to false), it is shown as "Deleted account" in places like comments and direct messages
     - Backend validation: Picture size ≤ 10MB (convert & compress uploaded file to PNG)
 - Table of event categories
     - Category ID, name
@@ -100,9 +101,8 @@ The platform is open to any campus event: study sessions, club meetings, open mi
 ```sql
 -- Table of users
 CREATE TABLE users(
-    uid TEXT PRIMARY KEY,
+    uid TEXT PRIMARY KEY, -- Supabase UID
     full_name TEXT NOT NULL,
-    pwd_hash TEXT NOT NULL, -- SHA-256 hash
     -- Image file encoded in "data:image/<format>;base64,<base64 encoded data>"
     profile_pic_data TEXT,
     is_active BOOLEAN NOT NULL -- Set to false when account is deleted
