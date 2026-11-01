@@ -304,11 +304,6 @@ SELECT * FROM chat_msgs WHERE chat_id=<id> ORDER BY msg_time;
 
 Use username: `user@example.com`; password: `password` for interface testing.
 
-```sql
-INSERT INTO users(uid, full_name, is_active) 
-VALUES ('dad2b8f3-0f35-4d51-abde-4f6eed729975', 'Example user 1', true);
-```
-
 ## Data functions
 
 Design appropriate functions for inserting values into the database and fetching records based on the example above (perform SQL queries on the Supabase server). Put them into a separate file (e.g. `src/api.jsx`) for organization and clarity. Implement relevant data validation and checks (e.g. title length, required fields, end_time >= start_time, image size/type limits) to prevent bad data from being written.
