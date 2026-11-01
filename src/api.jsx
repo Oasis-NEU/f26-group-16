@@ -68,31 +68,27 @@ export function fileToDataUrl(file) {
 
 // ---------- auth ----------
 // Login uses Supabase Auth with the user's real email (setup steps in
-// docs/auth-setup.md). Each account also gets a random 10-digit `uid`, which
-// is the key other tables use. A database trigger creates the matching
-// `users` row on sign-up.
+// docs/auth-setup.md). `users.uid` is the Supabase Auth user id, so the RLS
+// rules in AGENTS.md can compare it with auth.uid(). A database trigger
+// creates the matching `users` row on sign-up.
 
 export const PASSWORD_MIN = 8
+export const NAME_MAX = 100
 
 const isValidEmail = (email) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
-
-export function generateUid() {
-  const digits = crypto.getRandomValues(new Uint8Array(10))
-  // First digit 1-9 so the UID never starts with 0.
-  return Array.from(digits, (d, i) => (i === 0 ? 1 + (d % 9) : d % 10)).join('')
-}
 
 // Returns { needsConfirmation: true } when "Confirm email" is on in Supabase:
 // the user has to click the link in their inbox before they can log in.
 export async function signUp({ email, fullName, password, confirmPassword }) {
   check(isValidEmail(email?.trim()), 'Enter a valid email.')
   check(fullName?.trim(), 'Enter your full name.')
+  check(fullName.trim().length <= NAME_MAX, `Name must be ${NAME_MAX} characters or less.`)
   check(password?.length >= PASSWORD_MIN, `Password needs at least ${PASSWORD_MIN} characters.`)
   check(password === confirmPassword, 'Passwords don’t match.')
   const { data, error } = await supabase.auth.signUp({
     email: email.trim(),
     password,
-    options: { data: { uid: generateUid(), full_name: fullName.trim() } },
+    options: { data: { full_name: fullName.trim() } },
   })
   if (error?.message === 'User already registered') throw new Error('That email already has an account. Try logging in.')
   if (error) throw toError(error)
@@ -122,9 +118,9 @@ export function onSessionChange(callback) {
   return () => data.subscription.unsubscribe()
 }
 
-// The `users` row for a logged-in Supabase Auth user.
+// The `users` row for a logged-in Supabase Auth user (uid = Auth user id).
 export async function getProfile(authId) {
-  return unwrap(await supabase.from('users').select(USER_COLUMNS).eq('auth_id', authId).maybeSingle())
+  return getUser(authId)
 }
 
 // ---------- users ----------
