@@ -132,7 +132,7 @@ CREATE TABLE events(
     picture_data TEXT
 );
 
--- [Create for each event] (UUID represents event ID)
+-- Event comments table
 CREATE TABLE event_comments(
     comment_id TEXT PRIMARY KEY,
     event_id TEXT NOT NULL REFERENCES events(event_id) ON DELETE CASCADE,
@@ -143,14 +143,14 @@ CREATE TABLE event_comments(
     replying_to TEXT NOT NULL REFERENCES event_comments_UUID(comment_id) ON DELETE CASCADE
 );
 
--- Joined events information by user
+-- Joined events information (create rows for each user)
 CREATE TABLE joined_events(
     event_id TEXT NOT NULL,
     joiner_uid TEXT NOT NULL REFERENCES users(uid),
     CONSTRAINT uc_event_joiner UNIQUE (event_id, joiner_uid)
 );
 
--- Chats list information by user
+-- Chats list information (create rows for each user)
 CREATE TABLE chats_list(
     chat_id TEXT NOT NULL,
     -- Defaults to event name; each user can set its own name for reference
@@ -159,9 +159,10 @@ CREATE TABLE chats_list(
     CONSTRAINT uc_chat_user UNIQUE (chat_id, user_id)
 );
 
--- [Create for each chat] (UUID represents chat ID)
-CREATE TABLE chat_msgs_UUID(
+-- Chat messages table
+CREATE TABLE chat_msgs(
     msg_id TEXT PRIMARY KEY,
+    chat_id TEXT NOT NULL, -- Foreign key not used since primary key not used in chats_list (by user instead of by chat)
     msg_content TEXT NOT NULL,
     msg_time BIGINT NOT NULL,
     sender_uid TEXT NOT NULL REFERENCES users(uid)
