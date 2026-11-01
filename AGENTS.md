@@ -82,6 +82,7 @@ The platform is open to any campus event: study sessions, club meetings, open mi
     - Authentication handled by Supabase (no password stored)
     - The row is created by a database trigger on sign-up (see [Supabase Auth](#supabase-auth)), so an account can't exist in Supabase Auth without a `users` row
     - If a user is deleted (`is_active` set to false), it is shown as "Deleted account" in places like comments and direct messages
+    - Users can set their own `is_active` to false, but only administrators (SQL editor, Table Editor, or the secret key) can set it back to true
     - Backend validation: Picture size ≤ 10MB (compress & encode uploaded file to WebP)
 - Table of event categories
     - Category ID, name
@@ -117,6 +118,21 @@ CREATE TABLE users(
     is_active BOOLEAN NOT NULL DEFAULT true -- Set to false when account is deleted
     -- (Email and passwords are handled by Supabase)
 );
+
+-- Only administrators can reactivate a deleted account. App requests run as the
+-- anon/authenticated roles; the SQL editor, Table Editor, and secret key don't.
+CREATE FUNCTION prevent_user_reactivation() RETURNS trigger
+LANGUAGE plpgsql SET search_path = public AS $$
+BEGIN
+    IF OLD.is_active = false AND NEW.is_active = true
+        AND current_user IN ('anon', 'authenticated') THEN
+        RAISE EXCEPTION 'Only administrators can reactivate a deleted account';
+    END IF;
+    RETURN NEW;
+END $$;
+
+CREATE TRIGGER trg_prevent_user_reactivation BEFORE UPDATE OF is_active ON users
+    FOR EACH ROW EXECUTE FUNCTION prevent_user_reactivation();
 
 -- Table of event categories
 CREATE TABLE event_categories(
