@@ -1,6 +1,12 @@
 import { useEffect, useState } from 'react'
 import { getProfile, logOut, onSessionChange } from './api.jsx'
+import MenuBar from './components/menu_bar.jsx'
+import { Notice, primaryButton } from './components/ui.jsx'
+import EditEvent from './pages/edit_event.jsx'
+import EventDetail from './pages/event_detail.jsx'
+import Homepage from './pages/homepage.jsx'
 import LoginPage from './pages/login_page.jsx'
+import { HOME_PATH, useRoute } from './utils/routes.js'
 
 function Loading() {
   return (
@@ -10,44 +16,55 @@ function Loading() {
   )
 }
 
-// Placeholder until the homepage and top menu bar land. Log out will move into
-// the account settings popup.
-function Home({ profile }) {
-  const [busy, setBusy] = useState(false)
+// Stands in for pages that haven't been built yet.
+function ComingSoon({ icon, title }) {
+  return (
+    <Notice icon={icon} title={title}>
+      <p>This page is coming soon.</p>
+      <a href={HOME_PATH} className={primaryButton}>
+        Back to events
+      </a>
+    </Notice>
+  )
+}
 
-  const handleLogOut = async () => {
-    setBusy(true)
-    try {
-      await logOut()
-    } catch {
-      setBusy(false)
-    }
+function currentPage(route, profile) {
+  switch (route.page) {
+    case 'home':
+      return <Homepage />
+    case 'new-event':
+      return <EditEvent eventId={null} profile={profile} />
+    case 'event':
+      return <EventDetail key={route.eventId} eventId={route.eventId} profile={profile} />
+    case 'edit-event':
+      return <EditEvent key={route.eventId} eventId={route.eventId} profile={profile} />
+    case 'schedule':
+      return <ComingSoon icon="🗓️" title="Your schedule" />
+    case 'profile':
+      return <ComingSoon icon="👤" title={route.uid && route.uid !== profile.uid ? 'Profiles' : 'Your profile'} />
+    default:
+      return (
+        <Notice icon="🧭" title="Page not found">
+          <a href={HOME_PATH} className={primaryButton}>
+            Back to events
+          </a>
+        </Notice>
+      )
   }
+}
+
+// The logged-in app: menu bar plus the page for the current hash route.
+function Shell({ profile }) {
+  const route = useRoute()
+
+  useEffect(() => {
+    window.scrollTo(0, 0)
+  }, [route.page, route.eventId, route.uid])
 
   return (
     <div className="min-h-screen bg-page">
-      <header className="border-b border-line">
-        <div className="mx-auto flex max-w-6xl items-center justify-between gap-4 px-4 py-4 sm:px-6">
-          <div className="flex items-center gap-2">
-            <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-brand-500 text-lg" aria-hidden="true">
-              🎾
-            </span>
-            <span className="text-xl font-extrabold tracking-tight text-ink">Rally</span>
-          </div>
-          <button
-            type="button"
-            onClick={handleLogOut}
-            disabled={busy}
-            className="rounded-lg border border-line bg-surface px-4 py-2 text-sm font-semibold text-ink hover:bg-brand-50 disabled:opacity-60"
-          >
-            {busy ? 'Logging out…' : 'Log out'}
-          </button>
-        </div>
-      </header>
-      <main className="mx-auto max-w-6xl px-4 py-20 sm:px-6">
-        <h1 className="text-3xl font-extrabold tracking-tight text-ink sm:text-4xl">You’re in, {profile.full_name}.</h1>
-        <p className="mt-3 text-muted">The event board is coming soon.</p>
-      </main>
+      <MenuBar currentPage={route.page} />
+      <main className="mx-auto max-w-6xl px-4 py-10 sm:px-6 sm:py-12">{currentPage(route, profile)}</main>
     </div>
   )
 }
@@ -89,7 +106,7 @@ function App() {
   if (session === undefined) return <Loading />
   if (!session) return <LoginPage notice={notice} />
   if (!profile) return notice ? <LoginPage notice={notice} /> : <Loading />
-  return <Home profile={profile} />
+  return <Shell profile={profile} />
 }
 
 export default App

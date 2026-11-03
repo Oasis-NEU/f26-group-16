@@ -37,6 +37,7 @@ The platform is open to any campus event: study sessions, club meetings, open mi
 - The home page lists the available events in a grid view, detailing the picture, title, date, and organizer (account) of the event
 - The user can choose different categories (e.g. sport, entertainment) to filter events
     - Additional filters like date range
+- "Post an event" button that opens the edit event page in create mode (same form, empty)
 
 ### Detail page
 
@@ -80,7 +81,9 @@ The platform is open to any campus event: study sessions, club meetings, open mi
 - Table of users
     - Name, UID (the one in Supabase), profile picture data
     - Authentication handled by Supabase (no password stored)
+    - The row is created by a database trigger on sign-up (see [Supabase Auth](#supabase-auth)), so an account can't exist in Supabase Auth without a `users` row
     - If a user is deleted (`is_active` set to false), it is shown as "Deleted account" in places like comments and direct messages
+    - Users can set their own `is_active` to false, but only administrators (SQL editor, Table Editor, or the secret key) can set it back to true
     - Backend validation: Picture size ≤ 10MB (compress & encode uploaded file to WebP)
 - Table of event categories
     - Category ID, name
@@ -101,182 +104,20 @@ All date and time values are represented using UNIX timestamps in seconds. Use a
 
 ### SQL Representation
 
-```sql
--- Image columns hold "data:image/webp;base64,<base64 encoded data>".
--- Max length 13981039 = 23-char prefix + base64 of 10 MiB (4 * ceil(10485760 / 3)).
+SQL representation of the database can be found in the `docs/main_schema.sql` file. Example data can be found in the `docs/example_data.sql` file.
 
--- Table of users
-CREATE TABLE users(
-    uid TEXT PRIMARY KEY, -- Supabase UID
-    full_name TEXT NOT NULL CHECK (char_length(btrim(full_name)) BETWEEN 1 AND 100),
-    profile_pic_data TEXT CHECK (
-        profile_pic_data LIKE 'data:image/webp;base64,%'
-        AND octet_length(profile_pic_data) <= 13981039
-    ),
-    is_active BOOLEAN NOT NULL DEFAULT true -- Set to false when account is deleted
-    -- (Email and passwords are handled by Supabase)
-);
+### Supabase Auth
 
--- Table of event categories
-CREATE TABLE event_categories(
-    category_id TEXT PRIMARY KEY,
-    name TEXT NOT NULL CHECK (char_length(btrim(name)) BETWEEN 1 AND 50)
-);
+Users sign up and log in with their email and password through Supabase Auth. `users.uid` is the Supabase Auth user id, so the RLS rules above can compare it with `auth.uid()`.
 
--- Table of events created
-CREATE TABLE events(
-    event_id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
-    event_title TEXT NOT NULL CHECK (char_length(btrim(event_title)) BETWEEN 1 AND 100),
-    event_description TEXT CHECK (char_length(event_description) <= 5000),
-    create_time BIGINT NOT NULL DEFAULT extract(epoch FROM now())::bigint,
-    start_time BIGINT NOT NULL CHECK (start_time > 0),
-    end_time BIGINT,
-    location TEXT CHECK (char_length(location) <= 200),
-    organizer_uid TEXT NOT NULL REFERENCES users(uid),
-    category_id TEXT REFERENCES event_categories(category_id),
-    picture_data TEXT CHECK (
-        picture_data LIKE 'data:image/webp;base64,%'
-        AND octet_length(picture_data) <= 13981039
-    ),
-    CONSTRAINT chk_event_times CHECK (end_time IS NULL OR end_time >= start_time)
-);
+Dashboard setting (Authentication → Sign In / Providers → **Email**):
 
--- Event comments table
-CREATE TABLE event_comments(
-    comment_id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
-    event_id TEXT NOT NULL REFERENCES events(event_id) ON DELETE CASCADE,
-    comment_content TEXT NOT NULL CHECK (char_length(btrim(comment_content)) BETWEEN 1 AND 2000),
-    comment_time BIGINT NOT NULL DEFAULT extract(epoch FROM now())::bigint,
-    sender_uid TEXT NOT NULL REFERENCES users(uid),
-    -- NULL for main comments; replies only reference the main comment (see trigger below)
-    replying_to TEXT,
-    CONSTRAINT uc_comment_event UNIQUE (comment_id, event_id),
-    -- Replies must be on the same event as their main comment, and are deleted with it
-    CONSTRAINT fk_reply_parent FOREIGN KEY (replying_to, event_id)
-        REFERENCES event_comments(comment_id, event_id) ON DELETE CASCADE,
-    CONSTRAINT chk_not_self_reply CHECK (replying_to <> comment_id)
-);
+- Email provider: **on**
+- Confirm email: **off for now**. Supabase's built-in email service only delivers to members of the Supabase project and sends just a few emails per hour. Turn it back on once a custom SMTP sender is set up (Authentication → Emails → SMTP Settings). The app handles both: with it on, sign-up shows "Check your inbox".
 
--- Reject replies to replies (keeps threads one level deep)
-CREATE FUNCTION check_reply_target() RETURNS trigger
-LANGUAGE plpgsql SET search_path = public AS $$
-BEGIN
-    IF NEW.replying_to IS NOT NULL AND EXISTS (
-        SELECT 1 FROM event_comments
-        WHERE comment_id = NEW.replying_to AND replying_to IS NOT NULL
-    ) THEN
-        RAISE EXCEPTION 'Replies must reference a main comment';
-    END IF;
-    RETURN NEW;
-END $$;
+Sign-up trigger: creates the `users` row when someone signs up. `full_name` comes from the sign-up form's metadata. The `handle_new_user` trigger can be found in the `docs/main_schema.sql` file.
 
-CREATE TRIGGER trg_check_reply_target BEFORE INSERT OR UPDATE ON event_comments
-    FOR EACH ROW EXECUTE FUNCTION check_reply_target();
-
--- Joined events information (create rows for each user)
-CREATE TABLE joined_events(
-    event_id TEXT NOT NULL REFERENCES events(event_id) ON DELETE CASCADE,
-    joiner_uid TEXT NOT NULL REFERENCES users(uid),
-    CONSTRAINT uc_event_joiner UNIQUE (event_id, joiner_uid)
-);
-
--- Chats list information (create rows for each user)
-CREATE TABLE chats_list(
-    chat_id TEXT NOT NULL,
-    -- Defaults to event name; each user can set its own name for reference
-    chat_name TEXT NOT NULL CHECK (char_length(btrim(chat_name)) BETWEEN 1 AND 100),
-    user_id TEXT NOT NULL REFERENCES users(uid),
-    CONSTRAINT uc_chat_user UNIQUE (chat_id, user_id)
-);
-
--- Chat messages table
-CREATE TABLE chat_msgs(
-    msg_id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
-    chat_id TEXT NOT NULL, -- Foreign key not used since primary key not used in chats_list (by user instead of by chat)
-    msg_content TEXT NOT NULL CHECK (char_length(btrim(msg_content)) BETWEEN 1 AND 2000),
-    msg_time BIGINT NOT NULL DEFAULT extract(epoch FROM now())::bigint,
-    sender_uid TEXT NOT NULL REFERENCES users(uid)
-);
-
--- Indexes for common lookups
-CREATE INDEX idx_events_start_time ON events(start_time);
-CREATE INDEX idx_events_organizer ON events(organizer_uid);
-CREATE INDEX idx_comments_event ON event_comments(event_id, comment_time);
-CREATE INDEX idx_joined_joiner ON joined_events(joiner_uid);
-CREATE INDEX idx_chats_user ON chats_list(user_id);
-CREATE INDEX idx_msgs_chat ON chat_msgs(chat_id, msg_time);
-
--- Default event categories
-INSERT INTO event_categories(category_id, name) VALUES
-    ('sports', 'Sports'),
-    ('academic', 'Academic'),
-    ('arts', 'Arts & Entertainment'),
-    ('clubs', 'Clubs'),
-    ('social', 'Social'),
-    ('career', 'Career');
-```
-
-### Row-level security
-
-Signed-in users can read shared data; users can only write rows that belong to them. Chats are only visible to their members.
-
-```sql
-ALTER TABLE users ENABLE ROW LEVEL SECURITY;
-ALTER TABLE event_categories ENABLE ROW LEVEL SECURITY;
-ALTER TABLE events ENABLE ROW LEVEL SECURITY;
-ALTER TABLE event_comments ENABLE ROW LEVEL SECURITY;
-ALTER TABLE joined_events ENABLE ROW LEVEL SECURITY;
-ALTER TABLE chats_list ENABLE ROW LEVEL SECURITY;
-ALTER TABLE chat_msgs ENABLE ROW LEVEL SECURITY;
-
-CREATE POLICY users_read ON users FOR SELECT TO authenticated USING (true);
-CREATE POLICY users_insert_own ON users FOR INSERT TO authenticated
-    WITH CHECK (uid = (SELECT auth.uid())::text);
-CREATE POLICY users_update_own ON users FOR UPDATE TO authenticated
-    USING (uid = (SELECT auth.uid())::text) WITH CHECK (uid = (SELECT auth.uid())::text);
-
-CREATE POLICY categories_read ON event_categories FOR SELECT TO authenticated USING (true);
-
-CREATE POLICY events_read ON events FOR SELECT TO authenticated USING (true);
-CREATE POLICY events_write_own ON events FOR ALL TO authenticated
-    USING (organizer_uid = (SELECT auth.uid())::text)
-    WITH CHECK (organizer_uid = (SELECT auth.uid())::text);
-
-CREATE POLICY comments_read ON event_comments FOR SELECT TO authenticated USING (true);
-CREATE POLICY comments_write_own ON event_comments FOR ALL TO authenticated
-    USING (sender_uid = (SELECT auth.uid())::text)
-    WITH CHECK (sender_uid = (SELECT auth.uid())::text);
-
--- Everyone can read joins (needed for joiner counts)
-CREATE POLICY joined_read ON joined_events FOR SELECT TO authenticated USING (true);
-CREATE POLICY joined_write_own ON joined_events FOR ALL TO authenticated
-    USING (joiner_uid = (SELECT auth.uid())::text)
-    WITH CHECK (joiner_uid = (SELECT auth.uid())::text);
-
--- SECURITY DEFINER so chat policies can check membership without recursing into chats_list RLS
-CREATE FUNCTION is_chat_member(target_chat TEXT) RETURNS boolean
-LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
-    SELECT EXISTS (
-        SELECT 1 FROM chats_list
-        WHERE chat_id = target_chat AND user_id = (SELECT auth.uid())::text
-    );
-$$;
-
-CREATE POLICY chats_read ON chats_list FOR SELECT TO authenticated
-    USING (is_chat_member(chat_id));
--- Add your own row first, then rows for the other participants
-CREATE POLICY chats_insert ON chats_list FOR INSERT TO authenticated
-    WITH CHECK (user_id = (SELECT auth.uid())::text OR is_chat_member(chat_id));
-CREATE POLICY chats_update_own ON chats_list FOR UPDATE TO authenticated
-    USING (user_id = (SELECT auth.uid())::text) WITH CHECK (user_id = (SELECT auth.uid())::text);
-CREATE POLICY chats_delete_own ON chats_list FOR DELETE TO authenticated
-    USING (user_id = (SELECT auth.uid())::text);
-
-CREATE POLICY msgs_read ON chat_msgs FOR SELECT TO authenticated
-    USING (is_chat_member(chat_id));
-CREATE POLICY msgs_insert ON chat_msgs FOR INSERT TO authenticated
-    WITH CHECK (sender_uid = (SELECT auth.uid())::text AND is_chat_member(chat_id));
-```
+(Migration steps from the first auth version and troubleshooting are in `docs/auth-setup.md`.)
 
 ### Example commands for fetching records
 
@@ -304,14 +145,23 @@ SELECT * FROM chat_msgs WHERE chat_id=<id> ORDER BY msg_time;
 
 Use username: `user@example.com`; password: `password` for interface testing.
 
-```sql
-INSERT INTO users(uid, full_name, is_active) 
-VALUES ('dad2b8f3-0f35-4d51-abde-4f6eed729975', 'Example user 1', true);
-```
+To fill an empty database with example events (posted by the test user, some with pictures, comments, and joins), run `node --env-file=.env scripts/seed_events.mjs`. It skips events that already exist, so running it twice is safe.
 
 ## Data functions
 
 Design appropriate functions for inserting values into the database and fetching records based on the example above (perform SQL queries on the Supabase server). Put them into a separate file (e.g. `src/api.jsx`) for organization and clarity. Implement relevant data validation and checks (e.g. title length, required fields, end_time >= start_time, image size/type limits) to prevent bad data from being written.
+
+Auth functions in `src/api.jsx`:
+
+| Function | What it does |
+|---|---|
+| `signUp({ email, fullName, password, confirmPassword })` | Validates, then creates the account. The sign-up trigger creates the `users` row. |
+| `logIn(email, password)` | Logs in. The session is saved in the browser until logout. |
+| `logOut()` | Logs out (for the account settings popup) |
+| `onSessionChange(callback)` | Lets `App.jsx` switch between the login page and the app |
+| `getProfile(authId)` | The `users` row for the logged-in account (`uid` = `authId`) |
+
+If `is_active` is false, `App.jsx` logs the user straight back out and shows "This account has been deleted."
 
 ## Stack
 
@@ -337,22 +187,47 @@ index.html                  # page shell + inline script that applies dark mode 
 src/
   main.jsx                  # React entry
   index.css                 # Tailwind import, theme tokens, dark overrides, logo animation
-  App.jsx                   # Core app logic
+  App.jsx                   # Core app logic: session check, menu bar, page for the current route
   api.jsx                   # Functions for reading/modifying the database
   pages/
     intro_page.jsx          # Introduction page before logging in
     login_page.jsx          # User login and create account page
     homepage.jsx            # Homepage showing the available events
     event_detail.jsx        # Event detail page
-    edit_event.jsx          # Edit event page
+    edit_event.jsx          # Edit event page (also creates new events)
     schedule.jsx            # Personal schedule (joined events) page
     account_profile.jsx     # Current user profile + account settings popup
   components/
     EventCard.jsx           # event item in homepage & account profile display
+    EventPicture.jsx        # event picture, or the category glyph when there is none
     Logo.jsx                # SVG tennis racket logo with wind trails
     menu_bar.jsx            # Top menu bar
     messages_popup.jsx      # Popup view for direct messages
+    ui.jsx                  # shared button/input styles, ErrorMessage, Notice
+  utils/
+    supabase.js             # Supabase client (only api.jsx imports it)
+    routes.js               # hash routes: path builders, useRoute(), navigate()
+    format.js               # dates, "Deleted account" names, category glyphs
+scripts/
+  seed_events.mjs           # example events for testing
+  seed_images/              # WebP pictures for the example events (credits in CREDITS.md)
 ```
+
+### Routes
+
+There's no router library. Pages are picked from the URL hash in `App.jsx`, and links use the builders in `src/utils/routes.js` (e.g. `<a href={eventPath(id)}>`) instead of writing hashes by hand.
+
+| Hash | Page |
+|---|---|
+| `#/` | Homepage |
+| `#/event/new` | Edit event page, create mode |
+| `#/event/<event_id>` | Detail page |
+| `#/event/<event_id>/edit` | Edit event page |
+| `#/schedule` | Personal schedule |
+| `#/profile` | Your profile |
+| `#/profile/<uid>` | Someone else's profile |
+
+Schedule and profile show a "coming soon" placeholder in `App.jsx` until their pages exist. Replace the placeholder in `currentPage()` when you build them.
 
 # Appearance and design
 
