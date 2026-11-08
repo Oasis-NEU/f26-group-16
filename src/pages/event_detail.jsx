@@ -3,18 +3,22 @@ import {
   COMMENT_MAX,
   addComment,
   countJoiners,
+  findOrCreateChat,
   getEvent,
   hasJoined,
   joinEvent,
   leaveEvent,
   listComments,
+} from '../api.jsx'
   listJoiners,
 } from '../api.jsx'
 import Avatar from '../components/Avatar.jsx'
 import EventPicture from '../components/EventPicture.jsx'
 import { ErrorMessage, Notice, inputClass, primaryButton, secondaryButton, smallButton } from '../components/ui.jsx'
+import { openChat } from '../utils/chat_events.js'
 import { displayName, formatEventTime, formatTimestamp } from '../utils/format.js'
 import { HOME_PATH, editEventPath, profilePath } from '../utils/routes.js'
+import { showToast } from '../utils/toast.js'
 
 // Links to the user's profile, or plain text for deleted accounts.
 function UserName({ user, className = '' }) {
@@ -169,6 +173,7 @@ function JoinButton({ eventId, profile, initialCount, initialJoined, onChange })
     setCount((c) => c + (next ? 1 : -1))
     try {
       await (next ? joinEvent(eventId, profile.uid) : leaveEvent(eventId, profile.uid))
+      showToast(next ? 'You’re in! See you there.' : 'You left this event.')
       onChange?.()
     } catch (err) {
       setJoined(!next)
@@ -212,6 +217,7 @@ function CommentForm({ eventId, profile, replyingTo, onPosted, onCancel }) {
       const comment = await addComment({ eventId, senderUid: profile.uid, content: text, replyingTo })
       setText('')
       onPosted(comment)
+      showToast(replyingTo ? 'Reply posted.' : 'Comment posted.')
     } catch (err) {
       setError(err.message)
     }
@@ -365,6 +371,8 @@ const backLink = (
 export default function EventDetail({ eventId, profile }) {
   const [result, setResult] = useState(null)
   const [retries, setRetries] = useState(0)
+  const [dmBusy, setDmBusy] = useState(false)
+  const [dmError, setDmError] = useState('')
   const [dmNote, setDmNote] = useState(false)
   const [joinChanges, setJoinChanges] = useState(0)
 
@@ -413,6 +421,20 @@ export default function EventDetail({ eventId, profile }) {
 
   const isOrganizer = event.organizer_uid === profile.uid
   const organizerActive = Boolean(event.organizer?.is_active)
+
+  const handleMessageOrganizer = async () => {
+    setDmBusy(true)
+    setDmError('')
+    try {
+      const chatId = await findOrCreateChat({ uid: profile.uid, otherUid: event.organizer_uid, chatName: event.event_title })
+      openChat(chatId)
+    } catch (err) {
+      setDmError(err.message)
+    } finally {
+      setDmBusy(false)
+    }
+  }
+
   return (
     <article className="space-y-6">
       {backLink}
@@ -453,17 +475,13 @@ export default function EventDetail({ eventId, profile }) {
             <div className="space-y-2">
               <button
                 type="button"
-                onClick={() => setDmNote(true)}
-                disabled={!organizerActive}
+                onClick={handleMessageOrganizer}
+                disabled={!organizerActive || dmBusy}
                 className={`${secondaryButton} w-full`}
               >
                 <span aria-hidden="true">💬</span> Message organizer
               </button>
-              {dmNote && (
-                <p role="status" className="text-center text-sm text-muted">
-                  Direct messages are coming soon.
-                </p>
-              )}
+              <ErrorMessage message={dmError} />
             </div>
           )}
           {isOrganizer && (

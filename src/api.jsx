@@ -3,9 +3,6 @@
 // failed query, so callers can wrap them in try/catch.
 //
 // Times are stored as UNIX timestamps in seconds (BIGINT columns).
-//
-// Not here yet: direct messages (chats_list, chat_msgs). Add them alongside
-// the messages popup.
 
 import { supabase } from './utils/supabase.js'
 
@@ -13,6 +10,8 @@ export const TITLE_MAX = 100
 export const DESCRIPTION_MAX = 5000
 export const LOCATION_MAX = 200
 export const COMMENT_MAX = 2000
+export const MESSAGE_MAX = 2000
+export const CHAT_NAME_MAX = 100
 export const IMAGE_MAX_BYTES = 10 * 1024 * 1024
 
 // Pictures are stored as WebP data URLs. The length limit matches the CHECK
@@ -31,6 +30,17 @@ const EVENT_COLUMNS = '*, organizer:users(uid, full_name, is_active), category:e
 
 // Comment rows come with `sender` ({ uid, full_name, is_active }) attached.
 const COMMENT_COLUMNS = '*, sender:users(uid, full_name, is_active)'
+
+// Newest messages a chat loads. The popup polls every 2 seconds, so this keeps
+// each fetch small however long the chat gets.
+const MESSAGE_FETCH_LIMIT = 200
+
+// Notification rows come with `actor` (who did it: { uid, full_name, is_active })
+// and `event` ({ event_id, event_title }) attached. The foreign key is named
+// because notifications has two links to `users`.
+const NOTIFICATION_COLUMNS =
+  '*, actor:users!notifications_actor_uid_fkey(uid, full_name, is_active), event:events(event_id, event_title)'
+const NOTIFICATION_FETCH_LIMIT = 30
 
 function check(condition, message) {
   if (!condition) throw new Error(message)
@@ -330,4 +340,133 @@ export async function addComment({ eventId, senderUid, content, replyingTo = nul
     replying_to: replyingTo,
   }
   return unwrap(await supabase.from('event_comments').insert(row).select(COMMENT_COLUMNS).single())
+}
+
+// ---------- direct messages ----------
+// A chat has one chats_list row per participant, sharing a chat_id. Each row
+// holds that user's own name for the chat.
+
+// The other participant's `users` row for each of the given chats, by chat id.
+async function otherParticipants(chatIds, uid) {
+  const rows = unwrap(
+    await supabase
+      .from('chats_list')
+      .select('chat_id, user:users(uid, full_name, is_active)')
+      .in('chat_id', chatIds)
+      .neq('user_id', uid),
+  )
+  return new Map(rows.map((row) => [row.chat_id, row.user]))
+}
+
+// The user's chats with the other participant (`other`) and newest message
+// (`latest`, or null) attached. Most recently active first, empty chats last.
+export async function listChats(uid) {
+  const chats = unwrap(await supabase.from('chats_list').select('chat_id, chat_name').eq('user_id', uid))
+  if (chats.length === 0) return []
+  const chatIds = chats.map((chat) => chat.chat_id)
+  const [others, latest] = await Promise.all([
+    otherParticipants(chatIds, uid),
+    Promise.all(
+      chatIds.map(async (chatId) => {
+        const rows = unwrap(
+          await supabase
+            .from('chat_msgs')
+            .select('msg_content, msg_time, sender_uid')
+            .eq('chat_id', chatId)
+            .order('msg_time', { ascending: false })
+            .order('msg_id', { ascending: false })
+            .limit(1),
+        )
+        return rows[0] ?? null
+      }),
+    ),
+  ])
+  return chats
+    .map((chat, i) => ({ ...chat, other: others.get(chat.chat_id) ?? null, latest: latest[i] }))
+    .sort((a, b) => (b.latest?.msg_time ?? 0) - (a.latest?.msg_time ?? 0))
+}
+
+// One of the user's chats with `other` attached, or null if they aren't in it.
+export async function getChat(chatId, uid) {
+  const chat = unwrap(
+    await supabase.from('chats_list').select('chat_id, chat_name').eq('chat_id', chatId).eq('user_id', uid).maybeSingle(),
+  )
+  if (!chat) return null
+  const others = await otherParticipants([chatId], uid)
+  return { ...chat, other: others.get(chatId) ?? null }
+}
+
+// Oldest first.
+export async function listMessages(chatId) {
+  const rows = unwrap(
+    await supabase
+      .from('chat_msgs')
+      .select('msg_id, msg_content, msg_time, sender_uid')
+      .eq('chat_id', chatId)
+      .order('msg_time', { ascending: false })
+      .order('msg_id', { ascending: false })
+      .limit(MESSAGE_FETCH_LIMIT),
+  )
+  return rows.reverse()
+}
+
+export async function sendMessage({ chatId, senderUid, content }) {
+  const text = content?.trim() ?? ''
+  check(text, 'Write something first.')
+  check(text.length <= MESSAGE_MAX, `Messages must be ${MESSAGE_MAX} characters or less.`)
+  check(senderUid, 'Sender is required.')
+  unwrap(await supabase.from('chat_msgs').insert({ chat_id: chatId, msg_content: text, sender_uid: senderUid }))
+}
+
+// Returns the id of the chat between the two users, creating it if needed.
+// `chatName` names a new chat for both of them.
+export async function findOrCreateChat({ uid, otherUid, chatName }) {
+  check(uid && otherUid, 'Both participants are required.')
+  check(uid !== otherUid, 'You can’t message yourself.')
+  const mine = unwrap(await supabase.from('chats_list').select('chat_id').eq('user_id', uid))
+  if (mine.length > 0) {
+    const shared = unwrap(
+      await supabase
+        .from('chats_list')
+        .select('chat_id')
+        .eq('user_id', otherUid)
+        .in('chat_id', mine.map((chat) => chat.chat_id))
+        .limit(1),
+    )
+    if (shared.length > 0) return shared[0].chat_id
+  }
+
+  const name = chatName?.trim() ?? ''
+  check(name, 'Chat name is required.')
+  check(name.length <= CHAT_NAME_MAX, `Chat names must be ${CHAT_NAME_MAX} characters or less.`)
+  const chatId = crypto.randomUUID()
+  // Your own row goes first: RLS only lets chat members add other participants.
+  unwrap(await supabase.from('chats_list').insert({ chat_id: chatId, chat_name: name, user_id: uid }))
+  const { error } = await supabase.from('chats_list').insert({ chat_id: chatId, chat_name: name, user_id: otherUid })
+  if (error) {
+    await supabase.from('chats_list').delete().eq('chat_id', chatId).eq('user_id', uid)
+    throw toError(error)
+  }
+  return chatId
+}
+
+// ---------- notifications ----------
+// A database trigger creates these (see docs/main_schema.sql), so the app only
+// reads them and marks them as read.
+
+// Newest first.
+export async function listNotifications(uid) {
+  return unwrap(
+    await supabase
+      .from('notifications')
+      .select(NOTIFICATION_COLUMNS)
+      .eq('recipient_uid', uid)
+      .order('create_time', { ascending: false })
+      .order('notification_id', { ascending: false })
+      .limit(NOTIFICATION_FETCH_LIMIT),
+  )
+}
+
+export async function markNotificationsRead(uid) {
+  unwrap(await supabase.from('notifications').update({ is_read: true }).eq('recipient_uid', uid).eq('is_read', false))
 }

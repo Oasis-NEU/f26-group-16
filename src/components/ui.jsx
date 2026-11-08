@@ -10,6 +10,25 @@ export const secondaryButton =
 export const smallButton =
   'inline-flex items-center justify-center gap-1.5 rounded-lg border border-line bg-surface px-3 py-1.5 text-sm font-semibold text-ink hover:bg-brand-50 disabled:cursor-not-allowed disabled:opacity-60'
 
+// Menu bar popups: right-aligned under the menu bar, or under their button on
+// wide screens.
+export const popupPanelClass =
+  'fixed left-4 right-4 top-[4.5rem] z-30 flex h-[min(32rem,calc(100dvh-6rem))] flex-col overflow-hidden rounded-2xl border border-line bg-surface shadow-lg sm:left-auto sm:w-96 lg:absolute lg:right-0 lg:top-12'
+
+// Shown in polling popups while the server can't be reached.
+export function ConnectionBanner({ show }) {
+  if (!show) return null
+  return (
+    <p role="status" className="bg-danger-50 px-4 py-2 text-xs font-semibold text-danger">
+      Can’t reach the server. Retrying…
+    </p>
+  )
+}
+
+export function PopupNote({ children }) {
+  return <p className="px-5 py-8 text-center text-sm text-muted">{children}</p>
+}
+
 export function ErrorMessage({ message }) {
   if (!message) return null
   return (

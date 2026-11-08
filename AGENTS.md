@@ -86,12 +86,32 @@ The platform is open to any campus event: study sessions, club meetings, open mi
 - List of messages displayed in a menu bar popup on homepage, displaying the chat name and most recent message for each entry
 - Each chat supports simple text messages, attempt to fetch latest messages every 2 seconds in the page
 - If couldn't connect to server, display a small banner in the popup saying so and retry connection as usual (every 2 seconds)
+- The popup has two views: the chat list, and one open chat with its messages and a text field. Polling only runs while the popup is open
+- The "Direct message" button on the detail page opens the popup on the chat with the organizer, creating it first if needed
+- Two users share one chat. A new chat is named after the event it started from, and later messages about other events go in the same chat
+- Deleted accounts show as "Deleted account"; their chats stay readable, but the text field is replaced by a note that you can't reply
+
+### Notification inbox
+
+- Bell button in the menu bar with a badge showing the number of unread notifications (updates every 5 seconds)
+- Popup lists the newest 30 notifications, each saying what happened and when, and links to the event
+- For now the only notification is "<name> joined <event>", sent to the organizer. Joining your own event sends nothing, and leaving and rejoining doesn't notify again
+- Opening the popup marks everything as read; those stay highlighted until it closes
+- If couldn't connect to server, display a small banner in the popup saying so and keep retrying
+
+### Action confirmations
+
+- A short message appears at the bottom of the screen for 3 seconds when an action works, so people know it went through
+- Used for: joining and leaving an event, posting a comment or reply, posting an event, and saving event changes. Call `showToast(message)` from `src/utils/toast.js` for new actions
+- Failures don't use it: they stay next to the form as an `ErrorMessage`
+- Not needed when the result is already obvious, like a sent message appearing in the chat
 
 ### Top menu bar
 
 - Website logo on the left
 - Navigation buttons for homepage, personal schedule, and user profile pages placed on the right
 - Direct messages popup button placed to the adjacent left of the navigation buttons
+- Notification inbox button placed to the adjacent left of the direct messages button
 
 # Technical details
 
@@ -118,12 +138,15 @@ The platform is open to any campus event: study sessions, club meetings, open mi
     - Create table for chat messages (message ID, message content, date, sender) labeled with its belonging chat ID
         - Fetch chat list: Query chats based on UID → Query participant UIDs based on chat ID
     - Use another table for lists of chats (chat ID, UID, user-defined name/label); separate entries for each user
+- Table for notifications
+    - Notification ID, recipient UID, actor UID (who did it), event ID, type, date, read flag
+    - Rows are only created by the `on_event_joined` database trigger. Users can read their own and change only `is_read`
 
 All date and time values are represented using UNIX timestamps in seconds. Use a separate library to encode uploaded picture as WebP to support Safari.
 
 ### SQL Representation
 
-SQL representation of the database can be found in the `docs/main_schema.sql` file. Example data can be found in the `docs/example_data.sql` file.
+SQL representation of the database can be found in the `docs/main_schema.sql` file. Example data can be found in the `docs/example_data.sql` file. `docs/notifications.sql` adds notifications to a database that already has the rest of the schema, keeping its data.
 
 ### Supabase Auth
 
@@ -182,6 +205,23 @@ Auth functions in `src/api.jsx`:
 
 If `is_active` is false, `App.jsx` logs the user straight back out and shows "This account has been deleted."
 
+Notification functions in `src/api.jsx`:
+
+| Function | What it does |
+|---|---|
+| `listNotifications(uid)` | The user's newest 30 notifications with `actor` and `event` attached, newest first |
+| `markNotificationsRead(uid)` | Marks all of the user's unread notifications as read |
+
+Direct message functions in `src/api.jsx`:
+
+| Function | What it does |
+|---|---|
+| `listChats(uid)` | The user's chats with `other` (the other participant) and `latest` (the newest message) attached, most recently active first |
+| `getChat(chatId, uid)` | One of the user's chats with `other` attached, or `null` if they aren't in it |
+| `listMessages(chatId)` | A chat's newest 200 messages, oldest first |
+| `sendMessage({ chatId, senderUid, content })` | Validates (1–2000 characters), then sends a message |
+| `findOrCreateChat({ uid, otherUid, chatName })` | Returns the id of the two users' chat, creating it if needed. Adds your own `chats_list` row first, because RLS only lets chat members add other participants |
+
 ## Stack
 
 - React 19 (function components and hooks only)
@@ -223,12 +263,18 @@ src/
     EventPopover.jsx        # hover/focus details popup for schedule calendar blocks
     Logo.jsx                # SVG tennis racket logo with wind trails
     menu_bar.jsx            # Top menu bar
-    messages_popup.jsx      # Popup view for direct messages
+    messages_popup.jsx      # Messages button + popup: chat list, open chat, 2-second polling
+    notifications_popup.jsx # Bell button + unread badge + notification list
+    toaster.jsx             # Shows showToast() confirmations at the bottom of the screen
     ui.jsx                  # shared button/input styles, ErrorMessage, Notice
   utils/
     supabase.js             # Supabase client (only api.jsx imports it)
     routes.js               # hash routes: path builders, useRoute(), navigate()
     format.js               # dates, "Deleted account" names, category glyphs
+    chat_events.js          # openChat(chatId): opens the messages popup from any page
+    use_dismiss.js          # useDismiss(): closes a popup on Escape or an outside click
+    use_polling.js          # usePolling(): re-fetches data on a timer, keeps it through failures
+    toast.js                # showToast(message): confirms an action from any page
     schedule.js             # schedule helpers: overlaps, conflicts, suggestions, block time labels
     calendar.js             # week calendar math: week start, day clipping, side-by-side layout
 scripts/

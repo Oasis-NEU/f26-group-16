@@ -12,6 +12,7 @@ import {
 import { ErrorMessage, Notice, inputClass, primaryButton, secondaryButton, smallButton } from '../components/ui.jsx'
 import { categoryEmoji, fromDateTimeInput, toDateTimeInput } from '../utils/format.js'
 import { HOME_PATH, eventPath, navigate } from '../utils/routes.js'
+import { showToast } from '../utils/toast.js'
 
 function Field({ id, label, optional, hint, children }) {
   return (
@@ -107,6 +108,7 @@ function EventForm({ categories, event, profile }) {
         ? await updateEvent(event.event_id, fields)
         : await createEvent({ ...fields, organizerUid: profile.uid })
       navigate(eventPath(saved.event_id))
+      showToast(event ? 'Changes saved.' : 'Event posted!')
     } catch (err) {
       setError(err.message)
       setBusy(false)
