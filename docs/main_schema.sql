@@ -4,6 +4,7 @@
 DROP TRIGGER IF EXISTS on_auth_user_created ON auth.users;
 
 -- Tables, children first. CASCADE also drops their indexes, policies, triggers and foreign keys.
+DROP TABLE IF EXISTS notifications CASCADE;
 DROP TABLE IF EXISTS chat_msgs CASCADE;
 DROP TABLE IF EXISTS chats_list CASCADE;
 DROP TABLE IF EXISTS joined_events CASCADE;
@@ -17,12 +18,10 @@ DELETE FROM auth.users;  -- wipes all logins; the signup trigger recreates users
 -- Leftover tables from earlier versions of the schema
 DROP TABLE IF EXISTS event_comments_example CASCADE;
 DROP TABLE IF EXISTS chat_msgs_example CASCADE;
-DROP TABLE IF EXISTS chat_msgs CASCADE;
-DROP TABLE IF EXISTS notifications CASCADE;
--- 
 
 -- Functions (dropping the tables does not remove them)
 DROP FUNCTION IF EXISTS public.handle_new_user() CASCADE;
+DROP FUNCTION IF EXISTS public.notify_event_joined() CASCADE;
 DROP FUNCTION IF EXISTS public.prevent_user_reactivation() CASCADE;
 DROP FUNCTION IF EXISTS public.check_reply_target() CASCADE;
 DROP FUNCTION IF EXISTS public.is_chat_member(TEXT) CASCADE;
