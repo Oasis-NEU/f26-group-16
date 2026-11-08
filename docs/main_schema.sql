@@ -19,7 +19,7 @@ DROP TABLE IF EXISTS event_comments_example CASCADE;
 DROP TABLE IF EXISTS chat_msgs_example CASCADE;
 DROP TABLE IF EXISTS chat_msgs CASCADE;
 DROP TABLE IF EXISTS notifications CASCADE;
--- */
+-- 
 
 -- Functions (dropping the tables does not remove them)
 DROP FUNCTION IF EXISTS public.handle_new_user() CASCADE;
