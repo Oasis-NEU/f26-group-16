@@ -35,6 +35,13 @@ const COMMENT_COLUMNS = '*, sender:users(uid, full_name, is_active)'
 // each fetch small however long the chat gets.
 const MESSAGE_FETCH_LIMIT = 200
 
+// Notification rows come with `actor` (who did it: { uid, full_name, is_active })
+// and `event` ({ event_id, event_title }) attached. The foreign key is named
+// because notifications has two links to `users`.
+const NOTIFICATION_COLUMNS =
+  '*, actor:users!notifications_actor_uid_fkey(uid, full_name, is_active), event:events(event_id, event_title)'
+const NOTIFICATION_FETCH_LIMIT = 30
+
 function check(condition, message) {
   if (!condition) throw new Error(message)
 }
@@ -434,4 +441,25 @@ export async function findOrCreateChat({ uid, otherUid, chatName }) {
     throw toError(error)
   }
   return chatId
+}
+
+// ---------- notifications ----------
+// A database trigger creates these (see docs/main_schema.sql), so the app only
+// reads them and marks them as read.
+
+// Newest first.
+export async function listNotifications(uid) {
+  return unwrap(
+    await supabase
+      .from('notifications')
+      .select(NOTIFICATION_COLUMNS)
+      .eq('recipient_uid', uid)
+      .order('create_time', { ascending: false })
+      .order('notification_id', { ascending: false })
+      .limit(NOTIFICATION_FETCH_LIMIT),
+  )
+}
+
+export async function markNotificationsRead(uid) {
+  unwrap(await supabase.from('notifications').update({ is_read: true }).eq('recipient_uid', uid).eq('is_read', false))
 }

@@ -4,6 +4,7 @@ import { HOME_PATH, PROFILE_PATH, SCHEDULE_PATH } from '../utils/routes.js'
 import { useDismiss } from '../utils/use_dismiss.js'
 import Logo from './Logo.jsx'
 import MessagesPopup from './messages_popup.jsx'
+import NotificationsPopup from './notifications_popup.jsx'
 
 const NAV_ITEMS = [
   { page: 'home', label: 'Home', icon: '🏠', href: HOME_PATH },
@@ -79,8 +80,8 @@ function MobileMenu({ currentPage }) {
   )
 }
 
-// Top menu bar: logo on the left; messages button, then navigation, on the
-// right. Below `md` the navigation collapses into a ☰ menu.
+// Top menu bar: logo on the left; notifications and messages buttons, then
+// navigation, on the right. Below `md` the navigation collapses into a ☰ menu.
 export default function MenuBar({ currentPage, profile }) {
   const [busy, handleLogOut] = useLogOut()
 
@@ -92,6 +93,7 @@ export default function MenuBar({ currentPage, profile }) {
           <span className="text-xl font-extrabold tracking-tight text-ink">Rally</span>
         </a>
         <div className="flex items-center gap-2">
+          <NotificationsPopup profile={profile} />
           <MessagesPopup profile={profile} />
           <nav aria-label="Main" className="hidden items-center gap-1 md:flex">
             {NAV_ITEMS.map((item) => (

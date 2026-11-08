@@ -15,6 +15,7 @@ import { ErrorMessage, Notice, inputClass, primaryButton, secondaryButton, small
 import { openChat } from '../utils/chat_events.js'
 import { displayName, formatEventTime, formatTimestamp } from '../utils/format.js'
 import { HOME_PATH, editEventPath, profilePath } from '../utils/routes.js'
+import { showToast } from '../utils/toast.js'
 
 // Links to the user's profile, or plain text for deleted accounts.
 function UserName({ user, className = '' }) {
@@ -55,6 +56,7 @@ function JoinButton({ eventId, profile, initialCount, initialJoined }) {
     setCount((c) => c + (next ? 1 : -1))
     try {
       await (next ? joinEvent(eventId, profile.uid) : leaveEvent(eventId, profile.uid))
+      showToast(next ? 'You’re in! See you there.' : 'You left this event.')
     } catch (err) {
       setJoined(!next)
       setCount((c) => c - (next ? 1 : -1))
@@ -97,6 +99,7 @@ function CommentForm({ eventId, profile, replyingTo, onPosted, onCancel }) {
       const comment = await addComment({ eventId, senderUid: profile.uid, content: text, replyingTo })
       setText('')
       onPosted(comment)
+      showToast(replyingTo ? 'Reply posted.' : 'Comment posted.')
     } catch (err) {
       setError(err.message)
     }

@@ -3,60 +3,14 @@ import { MESSAGE_MAX, getChat, listChats, listMessages, sendMessage } from '../a
 import { OPEN_CHAT_EVENT } from '../utils/chat_events.js'
 import { displayName, formatTimestamp } from '../utils/format.js'
 import { useDismiss } from '../utils/use_dismiss.js'
-import { ErrorMessage, inputClass } from './ui.jsx'
+import { usePolling } from '../utils/use_polling.js'
+import { ConnectionBanner, ErrorMessage, PopupNote, inputClass, popupPanelClass } from './ui.jsx'
 
 const POLL_MS = 2000
 
-// Runs `load` now and again 2 seconds after each run finishes, keeping the last
-// good data through failures. `load` must be stable (useCallback). `refresh`
-// fetches right away, and a run it replaces can't overwrite the newer result.
-function usePolling(load) {
-  const [state, setState] = useState({ data: null, failed: false })
-  const refreshRef = useRef(() => {})
-
-  useEffect(() => {
-    let cancelled = false
-    let timer
-    let latestRun = 0
-    const run = async () => {
-      clearTimeout(timer)
-      const thisRun = ++latestRun
-      const isCurrent = () => !cancelled && thisRun === latestRun
-      try {
-        const data = await load()
-        if (isCurrent()) setState({ data, failed: false })
-      } catch {
-        if (isCurrent()) setState((current) => ({ ...current, failed: true }))
-      }
-      if (isCurrent()) timer = setTimeout(run, POLL_MS)
-    }
-    refreshRef.current = run
-    run()
-    return () => {
-      cancelled = true
-      clearTimeout(timer)
-    }
-  }, [load])
-
-  return { ...state, refresh: useCallback(() => refreshRef.current(), []) }
-}
-
-function ConnectionBanner({ show }) {
-  if (!show) return null
-  return (
-    <p role="status" className="bg-danger-50 px-4 py-2 text-xs font-semibold text-danger">
-      Can’t reach the server. Retrying…
-    </p>
-  )
-}
-
-function PopupNote({ children }) {
-  return <p className="px-5 py-8 text-center text-sm text-muted">{children}</p>
-}
-
 function ChatList({ profile, onSelect }) {
   const load = useCallback(() => listChats(profile.uid), [profile.uid])
-  const { data: chats, failed } = usePolling(load)
+  const { data: chats, failed } = usePolling(load, POLL_MS)
 
   return (
     <>
@@ -178,7 +132,7 @@ function ChatView({ chatId, uid, onBack }) {
     const [chat, messages] = await Promise.all([getChat(chatId, uid), listMessages(chatId)])
     return { chat, messages }
   }, [chatId, uid])
-  const { data, failed, refresh } = usePolling(load)
+  const { data, failed, refresh } = usePolling(load, POLL_MS)
   const chat = data?.chat
 
   return (
@@ -242,11 +196,7 @@ export default function MessagesPopup({ profile }) {
         <span aria-hidden="true">💬</span>
       </button>
       {open && (
-        <div
-          role="dialog"
-          aria-label="Direct messages"
-          className="fixed left-4 right-4 top-[4.5rem] z-30 flex h-[min(32rem,calc(100dvh-6rem))] flex-col overflow-hidden rounded-2xl border border-line bg-surface shadow-lg sm:left-auto sm:w-96 lg:absolute lg:right-0 lg:top-12"
-        >
+        <div role="dialog" aria-label="Direct messages" className={popupPanelClass}>
           {chatId ? (
             <ChatView key={chatId} chatId={chatId} uid={profile.uid} onBack={() => setChatId(null)} />
           ) : (
