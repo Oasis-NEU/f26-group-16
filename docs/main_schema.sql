@@ -13,7 +13,7 @@ DROP TABLE IF EXISTS notifications CASCADE;
 -- Leftover tables from earlier versions of the schema
 DROP TABLE IF EXISTS event_comments_example CASCADE;
 DROP TABLE IF EXISTS chat_msgs_example CASCADE;
-*/
+-- */
 
 -- Image columns hold "data:image/webp;base64,<base64 encoded data>".
 -- Max length 13981039 = 23-char prefix + base64 of 10 MiB (4 * ceil(10485760 / 3)).
