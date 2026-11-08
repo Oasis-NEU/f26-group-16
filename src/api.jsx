@@ -359,7 +359,9 @@ async function otherParticipants(chatIds, uid) {
 }
 
 // The user's chats with the other participant (`other`) and newest message
-// (`latest`, or null) attached. Most recently active first, empty chats last.
+// (`latest`) attached, most recently active first. Chats with no messages are
+// left out, so opening a chat doesn't show up for the other person until
+// something is sent. Opening it again finds the same chat.
 export async function listChats(uid) {
   const chats = unwrap(await supabase.from('chats_list').select('chat_id, chat_name').eq('user_id', uid))
   if (chats.length === 0) return []
@@ -383,7 +385,8 @@ export async function listChats(uid) {
   ])
   return chats
     .map((chat, i) => ({ ...chat, other: others.get(chat.chat_id) ?? null, latest: latest[i] }))
-    .sort((a, b) => (b.latest?.msg_time ?? 0) - (a.latest?.msg_time ?? 0))
+    .filter((chat) => chat.latest)
+    .sort((a, b) => b.latest.msg_time - a.latest.msg_time)
 }
 
 // One of the user's chats with `other` attached, or null if they aren't in it.

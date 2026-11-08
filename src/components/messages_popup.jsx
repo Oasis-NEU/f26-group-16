@@ -26,13 +26,12 @@ function ChatList({ profile, onSelect }) {
                 <button type="button" onClick={() => onSelect(chat.chat_id)} className="w-full px-5 py-3 text-left hover:bg-brand-50">
                   <span className="flex items-baseline justify-between gap-3">
                     <span className="truncate font-semibold text-ink">{chat.chat_name}</span>
-                    {chat.latest && <span className="shrink-0 text-xs text-muted">{formatTimestamp(chat.latest.msg_time)}</span>}
+                    <span className="shrink-0 text-xs text-muted">{formatTimestamp(chat.latest.msg_time)}</span>
                   </span>
                   <span className="block truncate text-xs text-muted">{displayName(chat.other)}</span>
                   <span className="mt-0.5 block truncate text-sm text-muted">
-                    {chat.latest
-                      ? `${chat.latest.sender_uid === profile.uid ? 'You: ' : ''}${chat.latest.msg_content}`
-                      : 'No messages yet'}
+                    {chat.latest.sender_uid === profile.uid ? 'You: ' : ''}
+                    {chat.latest.msg_content}
                   </span>
                 </button>
               </li>
