@@ -1,4 +1,4 @@
-import { useEffect, useId, useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 import {
   COMMENT_MAX,
   addComment,
@@ -10,6 +10,9 @@ import {
   leaveEvent,
   listComments,
 } from '../api.jsx'
+  listJoiners,
+} from '../api.jsx'
+import Avatar from '../components/Avatar.jsx'
 import EventPicture from '../components/EventPicture.jsx'
 import { ErrorMessage, Notice, inputClass, primaryButton, secondaryButton, smallButton } from '../components/ui.jsx'
 import { openChat } from '../utils/chat_events.js'
@@ -41,7 +44,121 @@ function InfoRow({ icon, label, children }) {
   )
 }
 
-function JoinButton({ eventId, profile, initialCount, initialJoined }) {
+// How many joiners show before the "See all" button.
+const JOINER_PREVIEW = 6
+
+// Popup with everyone who joined, one per row. Uses <dialog> so Escape closes
+// it and keyboard focus stays inside while it's open.
+function GuestListDialog({ open, onClose, joiners, profile }) {
+  const ref = useRef(null)
+  const titleId = useId()
+
+  useEffect(() => {
+    const dialog = ref.current
+    if (open && !dialog.open) dialog.showModal()
+    if (!open && dialog.open) dialog.close()
+  }, [open])
+
+  return (
+    <dialog
+      ref={ref}
+      aria-labelledby={titleId}
+      onClose={onClose}
+      // A click on the dialog itself (not its contents) is a click on the backdrop.
+      onClick={(e) => e.target === e.currentTarget && onClose()}
+      className="m-auto w-[min(28rem,calc(100vw-2rem))] rounded-2xl border border-line bg-surface p-0 text-ink shadow-lg backdrop:bg-brand-900/60"
+    >
+      <div className="flex max-h-[80vh] flex-col">
+        <div className="flex items-center justify-between gap-4 border-b border-line px-5 py-4">
+          <h2 id={titleId} className="text-lg font-extrabold tracking-tight">
+            Who's going <span className="font-semibold text-muted">· {joiners.length}</span>
+          </h2>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close"
+            className="flex h-9 w-9 items-center justify-center rounded-lg text-xl text-muted hover:bg-brand-50 hover:text-ink"
+          >
+            <span aria-hidden="true">×</span>
+          </button>
+        </div>
+        <ul className="divide-y divide-line overflow-y-auto px-5">
+          {joiners.map((user) => (
+            <li key={user.uid} className="flex items-center gap-3 py-3">
+              <Avatar user={user} className="h-10 w-10 text-base" />
+              <span className="min-w-0 break-words font-semibold">
+                <UserName user={user} />
+                {user.uid === profile.uid && <span className="font-normal text-muted"> (you)</span>}
+              </span>
+            </li>
+          ))}
+        </ul>
+      </div>
+    </dialog>
+  )
+}
+
+// The first few people who joined, as name pills linking to their profiles,
+// with a button that opens the full list in a popup.
+// Reloads whenever `refreshKey` changes (after joining or leaving).
+function JoinerList({ eventId, profile, refreshKey }) {
+  const [state, setState] = useState(null)
+  const [showAll, setShowAll] = useState(false)
+
+  useEffect(() => {
+    let cancelled = false
+    listJoiners(eventId)
+      .then((joiners) => !cancelled && setState({ joiners }))
+      .catch((err) => !cancelled && setState({ error: err.message }))
+    return () => {
+      cancelled = true
+    }
+  }, [eventId, refreshKey])
+
+  let body
+  if (!state) body = <p className="text-sm text-muted">Loading…</p>
+  else if (state.error) body = <ErrorMessage message={state.error} />
+  else if (state.joiners.length === 0) body = <p className="text-sm text-muted">No one yet. Be the first!</p>
+  else {
+    const { joiners } = state
+    const hidden = joiners.length - JOINER_PREVIEW
+    body = (
+      <>
+        <ul className="flex flex-wrap gap-2">
+          {joiners.slice(0, JOINER_PREVIEW).map((user) => (
+            <li
+              key={user.uid}
+              className="flex max-w-full items-center gap-2 rounded-full border border-line bg-page py-1 pl-1 pr-3 text-sm font-semibold"
+            >
+              <Avatar user={user} className="h-6 w-6 text-xs" />
+              <span className="min-w-0 break-words">
+                <UserName user={user} />
+                {user.uid === profile.uid && <span className="font-normal text-muted"> (you)</span>}
+              </span>
+            </li>
+          ))}
+        </ul>
+        {hidden > 0 && (
+          <>
+            <button type="button" onClick={() => setShowAll(true)} aria-haspopup="dialog" className={smallButton}>
+              See all {joiners.length} going
+            </button>
+            <GuestListDialog open={showAll} onClose={() => setShowAll(false)} joiners={joiners} profile={profile} />
+          </>
+        )}
+      </>
+    )
+  }
+
+  return (
+    <div className="space-y-2">
+      <p className="text-xs font-semibold uppercase tracking-wide text-muted">Who's going</p>
+      {body}
+    </div>
+  )
+}
+
+function JoinButton({ eventId, profile, initialCount, initialJoined, onChange }) {
   const [joined, setJoined] = useState(initialJoined)
   const [count, setCount] = useState(initialCount)
   const [busy, setBusy] = useState(false)
@@ -57,6 +174,7 @@ function JoinButton({ eventId, profile, initialCount, initialJoined }) {
     try {
       await (next ? joinEvent(eventId, profile.uid) : leaveEvent(eventId, profile.uid))
       showToast(next ? 'You’re in! See you there.' : 'You left this event.')
+      onChange?.()
     } catch (err) {
       setJoined(!next)
       setCount((c) => c - (next ? 1 : -1))
@@ -255,6 +373,8 @@ export default function EventDetail({ eventId, profile }) {
   const [retries, setRetries] = useState(0)
   const [dmBusy, setDmBusy] = useState(false)
   const [dmError, setDmError] = useState('')
+  const [dmNote, setDmNote] = useState(false)
+  const [joinChanges, setJoinChanges] = useState(0)
 
   useEffect(() => {
     let cancelled = false
@@ -343,7 +463,14 @@ export default function EventDetail({ eventId, profile }) {
               {isOrganizer && <span className="font-normal text-muted"> (you)</span>}
             </InfoRow>
           </div>
-          <JoinButton eventId={event.event_id} profile={profile} initialCount={result.joinCount} initialJoined={result.joined} />
+          <JoinButton
+            eventId={event.event_id}
+            profile={profile}
+            initialCount={result.joinCount}
+            initialJoined={result.joined}
+            onChange={() => setJoinChanges((n) => n + 1)}
+          />
+          <JoinerList eventId={event.event_id} profile={profile} refreshKey={joinChanges} />
           {!isOrganizer && (
             <div className="space-y-2">
               <button

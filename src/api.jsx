@@ -277,6 +277,13 @@ export async function countJoiners(eventId) {
   return count
 }
 
+// People who joined an event, as { uid, full_name, profile_pic_data, is_active }.
+export async function listJoiners(eventId) {
+  check(eventId, 'Missing event.')
+  const rows = unwrap(await supabase.from('joined_events').select(`joiner:users(${USER_COLUMNS})`).eq('event_id', eventId))
+  return rows.map((row) => row.joiner).filter(Boolean)
+}
+
 export async function hasJoined(eventId, uid) {
   const rows = unwrap(
     await supabase.from('joined_events').select('event_id').eq('event_id', eventId).eq('joiner_uid', uid).limit(1),

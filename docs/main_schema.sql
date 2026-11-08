@@ -1,17 +1,36 @@
--- WARNING: This code will delete existing data, uncomment to run
+-- WARNING: This code will delete existing data
 /*
-DROP TABLE IF EXISTS users CASCADE;
-DROP TABLE IF EXISTS event_categories CASCADE;
-DROP TABLE IF EXISTS events CASCADE;
-DROP TABLE IF EXISTS event_comments_example CASCADE;
-DROP TABLE IF EXISTS event_comments CASCADE;
-DROP TABLE IF EXISTS joined_events CASCADE;
+-- Trigger on auth.users (dropping the public tables does not remove it)
+DROP TRIGGER IF EXISTS on_auth_user_created ON auth.users;
+
+-- Tables, children first. CASCADE also drops their indexes, policies, triggers and foreign keys.
+DROP TABLE IF EXISTS chat_msgs CASCADE;
 DROP TABLE IF EXISTS chats_list CASCADE;
+DROP TABLE IF EXISTS joined_events CASCADE;
+DROP TABLE IF EXISTS event_comments CASCADE;
+DROP TABLE IF EXISTS events CASCADE;
+DROP TABLE IF EXISTS event_categories CASCADE;
+DROP TABLE IF EXISTS users CASCADE;
+DELETE FROM auth.users;  -- wipes all logins; the signup trigger recreates users rows
+
+
+-- Leftover tables from earlier versions of the schema
+DROP TABLE IF EXISTS event_comments_example CASCADE;
 DROP TABLE IF EXISTS chat_msgs_example CASCADE;
 DROP TABLE IF EXISTS chat_msgs CASCADE;
 DROP TABLE IF EXISTS notifications CASCADE;
 -- */
 
+-- Functions (dropping the tables does not remove them)
+DROP FUNCTION IF EXISTS public.handle_new_user() CASCADE;
+DROP FUNCTION IF EXISTS public.prevent_user_reactivation() CASCADE;
+DROP FUNCTION IF EXISTS public.check_reply_target() CASCADE;
+DROP FUNCTION IF EXISTS public.is_chat_member(TEXT) CASCADE;
+
+-- Optional: also delete the Supabase accounts so auth.users matches the new, empty users table
+-- DELETE FROM auth.users;
+--
+*/
 -- #region Main database schema
 
 -- Image columns hold "data:image/webp;base64,<base64 encoded data>".
