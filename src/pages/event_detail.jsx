@@ -9,7 +9,6 @@ import {
   joinEvent,
   leaveEvent,
   listComments,
-} from '../api.jsx'
   listJoiners,
 } from '../api.jsx'
 import Avatar from '../components/Avatar.jsx'
@@ -44,12 +43,48 @@ function InfoRow({ icon, label, children }) {
   )
 }
 
+// Opens the messages popup on the chat with another user, creating it if needed.
+function useStartChat(profile) {
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+
+  const startChat = async (otherUid, chatName) => {
+    setBusy(true)
+    setError('')
+    try {
+      openChat(await findOrCreateChat({ uid: profile.uid, otherUid, chatName }))
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setBusy(false)
+    }
+  }
+  return { startChat, busy, error }
+}
+
+// Message icon next to someone's name. Nothing for yourself or deleted accounts.
+function MessageGuestButton({ user, profile, onMessage, disabled, className }) {
+  if (user.uid === profile.uid || !user.is_active) return null
+  return (
+    <button
+      type="button"
+      onClick={() => onMessage(user)}
+      disabled={disabled}
+      aria-label={`Message ${user.full_name}`}
+      title={`Message ${user.full_name}`}
+      className={`flex shrink-0 items-center justify-center hover:bg-brand-100 disabled:cursor-not-allowed disabled:opacity-60 ${className}`}
+    >
+      <span aria-hidden="true">💬</span>
+    </button>
+  )
+}
+
 // How many joiners show before the "See all" button.
 const JOINER_PREVIEW = 6
 
 // Popup with everyone who joined, one per row. Uses <dialog> so Escape closes
 // it and keyboard focus stays inside while it's open.
-function GuestListDialog({ open, onClose, joiners, profile }) {
+function GuestListDialog({ open, onClose, joiners, profile, onMessage, messageDisabled }) {
   const ref = useRef(null)
   const titleId = useId()
 
@@ -86,10 +121,17 @@ function GuestListDialog({ open, onClose, joiners, profile }) {
           {joiners.map((user) => (
             <li key={user.uid} className="flex items-center gap-3 py-3">
               <Avatar user={user} className="h-10 w-10 text-base" />
-              <span className="min-w-0 break-words font-semibold">
+              <span className="min-w-0 flex-1 break-words font-semibold">
                 <UserName user={user} />
                 {user.uid === profile.uid && <span className="font-normal text-muted"> (you)</span>}
               </span>
+              <MessageGuestButton
+                user={user}
+                profile={profile}
+                onMessage={onMessage}
+                disabled={messageDisabled}
+                className="h-9 w-9 rounded-lg"
+              />
             </li>
           ))}
         </ul>
@@ -99,11 +141,19 @@ function GuestListDialog({ open, onClose, joiners, profile }) {
 }
 
 // The first few people who joined, as name pills linking to their profiles,
-// with a button that opens the full list in a popup.
+// with a button that opens the full list in a popup. Each person has a message
+// button; a new chat is named after this event.
 // Reloads whenever `refreshKey` changes (after joining or leaving).
-function JoinerList({ eventId, profile, refreshKey }) {
+function JoinerList({ eventId, eventTitle, profile, refreshKey }) {
   const [state, setState] = useState(null)
   const [showAll, setShowAll] = useState(false)
+  const { startChat, busy, error } = useStartChat(profile)
+
+  // The full list is a modal, which would cover the messages popup, so it closes first.
+  const handleMessage = (user) => {
+    setShowAll(false)
+    startChat(user.uid, eventTitle)
+  }
 
   useEffect(() => {
     let cancelled = false
@@ -128,13 +178,20 @@ function JoinerList({ eventId, profile, refreshKey }) {
           {joiners.slice(0, JOINER_PREVIEW).map((user) => (
             <li
               key={user.uid}
-              className="flex max-w-full items-center gap-2 rounded-full border border-line bg-page py-1 pl-1 pr-3 text-sm font-semibold"
+              className="flex max-w-full items-center gap-2 rounded-full border border-line bg-page py-1 pl-1 pr-2 text-sm font-semibold"
             >
               <Avatar user={user} className="h-6 w-6 text-xs" />
               <span className="min-w-0 break-words">
                 <UserName user={user} />
                 {user.uid === profile.uid && <span className="font-normal text-muted"> (you)</span>}
               </span>
+              <MessageGuestButton
+                user={user}
+                profile={profile}
+                onMessage={handleMessage}
+                disabled={busy}
+                className="h-7 w-7 rounded-full text-xs"
+              />
             </li>
           ))}
         </ul>
@@ -143,7 +200,14 @@ function JoinerList({ eventId, profile, refreshKey }) {
             <button type="button" onClick={() => setShowAll(true)} aria-haspopup="dialog" className={smallButton}>
               See all {joiners.length} going
             </button>
-            <GuestListDialog open={showAll} onClose={() => setShowAll(false)} joiners={joiners} profile={profile} />
+            <GuestListDialog
+              open={showAll}
+              onClose={() => setShowAll(false)}
+              joiners={joiners}
+              profile={profile}
+              onMessage={handleMessage}
+              messageDisabled={busy}
+            />
           </>
         )}
       </>
@@ -154,6 +218,7 @@ function JoinerList({ eventId, profile, refreshKey }) {
     <div className="space-y-2">
       <p className="text-xs font-semibold uppercase tracking-wide text-muted">Who's going</p>
       {body}
+      <ErrorMessage message={error} />
     </div>
   )
 }
@@ -371,10 +436,8 @@ const backLink = (
 export default function EventDetail({ eventId, profile }) {
   const [result, setResult] = useState(null)
   const [retries, setRetries] = useState(0)
-  const [dmBusy, setDmBusy] = useState(false)
-  const [dmError, setDmError] = useState('')
-  const [dmNote, setDmNote] = useState(false)
   const [joinChanges, setJoinChanges] = useState(0)
+  const { startChat, busy: dmBusy, error: dmError } = useStartChat(profile)
 
   useEffect(() => {
     let cancelled = false
@@ -422,19 +485,6 @@ export default function EventDetail({ eventId, profile }) {
   const isOrganizer = event.organizer_uid === profile.uid
   const organizerActive = Boolean(event.organizer?.is_active)
 
-  const handleMessageOrganizer = async () => {
-    setDmBusy(true)
-    setDmError('')
-    try {
-      const chatId = await findOrCreateChat({ uid: profile.uid, otherUid: event.organizer_uid, chatName: event.event_title })
-      openChat(chatId)
-    } catch (err) {
-      setDmError(err.message)
-    } finally {
-      setDmBusy(false)
-    }
-  }
-
   return (
     <article className="space-y-6">
       {backLink}
@@ -470,12 +520,12 @@ export default function EventDetail({ eventId, profile }) {
             initialJoined={result.joined}
             onChange={() => setJoinChanges((n) => n + 1)}
           />
-          <JoinerList eventId={event.event_id} profile={profile} refreshKey={joinChanges} />
+          <JoinerList eventId={event.event_id} eventTitle={event.event_title} profile={profile} refreshKey={joinChanges} />
           {!isOrganizer && (
             <div className="space-y-2">
               <button
                 type="button"
-                onClick={handleMessageOrganizer}
+                onClick={() => startChat(event.organizer_uid, event.event_title)}
                 disabled={!organizerActive || dmBusy}
                 className={`${secondaryButton} w-full`}
               >
