@@ -14,12 +14,11 @@ DROP TABLE IF EXISTS notifications CASCADE;
 DROP TABLE IF EXISTS event_comments_example CASCADE;
 DROP TABLE IF EXISTS chat_msgs_example CASCADE;
 */
--- #region Main database schema
 
 -- Image columns hold "data:image/webp;base64,<base64 encoded data>".
 -- Max length 13981039 = 23-char prefix + base64 of 10 MiB (4 * ceil(10485760 / 3)).
 
--- Table of users
+-- #region Users list
 CREATE TABLE users(
     uid TEXT PRIMARY KEY, -- Supabase UID
     full_name TEXT NOT NULL CHECK (char_length(btrim(full_name)) BETWEEN 1 AND 100),
@@ -80,7 +79,7 @@ CREATE OR REPLACE TRIGGER on_auth_user_created
   AFTER INSERT ON auth.users
   FOR EACH ROW EXECUTE FUNCTION public.handle_new_user();
 
--- Table of event categories
+-- #region Event categories
 CREATE TABLE event_categories(
     category_id TEXT PRIMARY KEY,
     name TEXT NOT NULL CHECK (char_length(btrim(name)) BETWEEN 1 AND 50)
@@ -95,7 +94,7 @@ INSERT INTO event_categories(category_id, name) VALUES
     ('social', 'Social'),
     ('career', 'Career');
 
--- Table of events created
+-- #region Event entries
 CREATE TABLE events(
     event_id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
     event_title TEXT NOT NULL CHECK (char_length(btrim(event_title)) BETWEEN 1 AND 100),
@@ -113,7 +112,7 @@ CREATE TABLE events(
     CONSTRAINT chk_event_times CHECK (end_time IS NULL OR end_time >= start_time)
 );
 
--- Event comments table
+-- #region Event comments
 CREATE TABLE event_comments(
     comment_id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
     event_id TEXT NOT NULL REFERENCES events(event_id) ON DELETE CASCADE,
@@ -145,14 +144,16 @@ END $$;
 CREATE OR REPLACE TRIGGER trg_check_reply_target BEFORE INSERT OR UPDATE ON event_comments
     FOR EACH ROW EXECUTE FUNCTION check_reply_target();
 
--- Joined events information (create rows for each user)
+-- #region Joined events 
+-- (create rows for each user)
 CREATE TABLE joined_events(
     event_id TEXT NOT NULL REFERENCES events(event_id) ON DELETE CASCADE,
     joiner_uid TEXT NOT NULL REFERENCES users(uid) ON UPDATE CASCADE,
     CONSTRAINT uc_event_joiner UNIQUE (event_id, joiner_uid)
 );
 
--- Chats list information (create rows for each user)
+-- #region Chats list
+-- (create rows for each user)
 CREATE TABLE chats_list(
     chat_id TEXT NOT NULL,
     -- Defaults to event name; each user can set its own name for reference
@@ -161,7 +162,7 @@ CREATE TABLE chats_list(
     CONSTRAINT uc_chat_user UNIQUE (chat_id, user_id)
 );
 
--- Chat messages table
+-- #region Chat messages
 CREATE TABLE chat_msgs(
     msg_id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
     chat_id TEXT NOT NULL, -- Foreign key not used since primary key not used in chats_list (by user instead of by chat)
@@ -169,6 +170,41 @@ CREATE TABLE chat_msgs(
     msg_time BIGINT NOT NULL DEFAULT extract(epoch FROM now())::bigint,
     sender_uid TEXT NOT NULL REFERENCES users(uid) ON UPDATE CASCADE
 );
+
+-- #region Notifications
+CREATE TABLE notifications(
+    notification_id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+    recipient_uid TEXT NOT NULL REFERENCES users(uid) ON UPDATE CASCADE,
+    actor_uid TEXT NOT NULL REFERENCES users(uid) ON UPDATE CASCADE,
+    event_id TEXT NOT NULL REFERENCES events(event_id) ON DELETE CASCADE,
+    notification_type TEXT NOT NULL CHECK (notification_type IN ('event_joined')),
+    create_time BIGINT NOT NULL DEFAULT extract(epoch FROM now())::bigint,
+    is_read BOOLEAN NOT NULL DEFAULT false,
+    -- Leaving and rejoining an event doesn't notify the organizer again
+    CONSTRAINT uc_notification UNIQUE (recipient_uid, actor_uid, event_id, notification_type)
+);
+
+CREATE INDEX idx_notifications_recipient ON notifications(recipient_uid, create_time);
+
+-- Tells the organizer when someone else joins their event.
+-- SECURITY DEFINER because the joiner can't write to the organizer's inbox.
+CREATE OR REPLACE FUNCTION public.notify_event_joined()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER SET search_path = ''
+AS $$
+BEGIN
+  INSERT INTO public.notifications (recipient_uid, actor_uid, event_id, notification_type)
+  SELECT e.organizer_uid, new.joiner_uid, new.event_id, 'event_joined'
+  FROM public.events e
+  WHERE e.event_id = new.event_id AND e.organizer_uid <> new.joiner_uid
+  ON CONFLICT ON CONSTRAINT uc_notification DO NOTHING;
+  RETURN new;
+END;
+$$;
+CREATE OR REPLACE TRIGGER on_event_joined
+  AFTER INSERT ON joined_events
+  FOR EACH ROW EXECUTE FUNCTION public.notify_event_joined();
 
 -- Indexes for common lookups
 CREATE INDEX idx_events_start_time ON events(start_time);
@@ -187,6 +223,7 @@ ALTER TABLE event_comments ENABLE ROW LEVEL SECURITY;
 ALTER TABLE joined_events ENABLE ROW LEVEL SECURITY;
 ALTER TABLE chats_list ENABLE ROW LEVEL SECURITY;
 ALTER TABLE chat_msgs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE notifications ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY users_read ON users FOR SELECT TO authenticated USING (true);
 CREATE POLICY users_insert_own ON users FOR INSERT TO authenticated
@@ -236,25 +273,6 @@ CREATE POLICY msgs_read ON chat_msgs FOR SELECT TO authenticated
 CREATE POLICY msgs_insert ON chat_msgs FOR INSERT TO authenticated
     WITH CHECK (sender_uid = (SELECT auth.uid())::text AND is_chat_member(chat_id));
 
--- #region Notifications
-
--- Notifications shown in the menu bar inbox
-CREATE TABLE notifications(
-    notification_id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
-    recipient_uid TEXT NOT NULL REFERENCES users(uid) ON UPDATE CASCADE,
-    actor_uid TEXT NOT NULL REFERENCES users(uid) ON UPDATE CASCADE,
-    event_id TEXT NOT NULL REFERENCES events(event_id) ON DELETE CASCADE,
-    notification_type TEXT NOT NULL CHECK (notification_type IN ('event_joined')),
-    create_time BIGINT NOT NULL DEFAULT extract(epoch FROM now())::bigint,
-    is_read BOOLEAN NOT NULL DEFAULT false,
-    -- Leaving and rejoining an event doesn't notify the organizer again
-    CONSTRAINT uc_notification UNIQUE (recipient_uid, actor_uid, event_id, notification_type)
-);
-
-CREATE INDEX idx_notifications_recipient ON notifications(recipient_uid, create_time);
-
-ALTER TABLE notifications ENABLE ROW LEVEL SECURITY;
-
 -- Only the trigger below creates notifications, so there's no insert policy
 CREATE POLICY notifications_read_own ON notifications FOR SELECT TO authenticated
     USING (recipient_uid = (SELECT auth.uid())::text);
@@ -265,23 +283,3 @@ CREATE POLICY notifications_update_own ON notifications FOR UPDATE TO authentica
 -- Users can only mark notifications as read, not change what they say
 REVOKE UPDATE ON notifications FROM authenticated;
 GRANT UPDATE (is_read) ON notifications TO authenticated;
-
--- Tells the organizer when someone else joins their event.
--- SECURITY DEFINER because the joiner can't write to the organizer's inbox.
-CREATE OR REPLACE FUNCTION public.notify_event_joined()
-RETURNS trigger
-LANGUAGE plpgsql
-SECURITY DEFINER SET search_path = ''
-AS $$
-BEGIN
-  INSERT INTO public.notifications (recipient_uid, actor_uid, event_id, notification_type)
-  SELECT e.organizer_uid, new.joiner_uid, new.event_id, 'event_joined'
-  FROM public.events e
-  WHERE e.event_id = new.event_id AND e.organizer_uid <> new.joiner_uid
-  ON CONFLICT ON CONSTRAINT uc_notification DO NOTHING;
-  RETURN new;
-END;
-$$;
-CREATE OR REPLACE TRIGGER on_event_joined
-  AFTER INSERT ON joined_events
-  FOR EACH ROW EXECUTE FUNCTION public.notify_event_joined();
