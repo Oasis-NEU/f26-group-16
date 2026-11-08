@@ -76,11 +76,14 @@ The platform is open to any campus event: study sessions, club meetings, open mi
 
 ### User profile and settings page
 
-- Shows the user profile picture and full name at the center top
-- Grid view of the user's event posts with buttons to edit or delete
-- Account settings button placed right below the profile picture
-  - Settings popup include: change/reset profile picture button, edit full name text field, change password fields (original & new), log out button, delete account button
-- Can view other user's profile page by clicking into the account name on event page and comment page (without edit/account settings button)
+- Accessible through the user profile button in the menu bar
+    - List popup containing "My profile" and "Account settings" buttons
+- User profile page:
+    - Shows the user profile picture and full name at top left, placing profile pic and name side by side
+    - Grid view of the user's event posts 
+        - Edit and delete post buttons if viewing their own profile
+- Account settings page include: change/reset profile picture button, edit full name text field, change password fields (original & new), log out button, delete account button
+- Can view other user's profile page by clicking into the account name on event page, comments, and direct messages
 
 ### Direct messages popup
 
@@ -124,7 +127,8 @@ The platform is open to any campus event: study sessions, club meetings, open mi
     - Authentication handled by Supabase (no password stored)
     - The row is created by a database trigger on sign-up (see [Supabase Auth](#supabase-auth)), so an account can't exist in Supabase Auth without a `users` row
     - If a user is deleted (`is_active` set to false), it is shown as "Deleted account" in places like comments and direct messages
-    - Users can set their own `is_active` to false, but only administrators (SQL editor, Table Editor, or the secret key) can set it back to true
+        - Users can set their own `is_active` to false, but only administrators (SQL editor, Table Editor, or the secret key) can set it back to true
+        - Delete the entry from Supabase auth table so the same email can be used to create a new account
     - Backend validation: Picture size ≤ 10MB (compress & encode uploaded file to WebP)
 - Table of event categories
     - Category ID, name
