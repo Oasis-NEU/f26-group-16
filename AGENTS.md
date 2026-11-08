@@ -89,6 +89,7 @@ The platform is open to any campus event: study sessions, club meetings, open mi
 - If couldn't connect to server, display a small banner in the popup saying so and retry connection as usual (every 2 seconds)
 - The popup has two views: the chat list, and one open chat with its messages and a text field. Polling only runs while the popup is open
 - The "Direct message" button on the detail page opens the popup on the chat with the organizer, creating it first if needed. The message buttons in the "Who's going" list do the same for that person
+- Chats with no messages don't appear in the list, for either person. Opening a chat doesn't notify the other person; they see it once a message is sent
 - Two users share one chat. A new chat is named after the event it started from, and later messages about other events go in the same chat
 - Deleted accounts show as "Deleted account"; their chats stay readable, but the text field is replaced by a note that you can't reply
 
@@ -217,7 +218,7 @@ Direct message functions in `src/api.jsx`:
 
 | Function | What it does |
 |---|---|
-| `listChats(uid)` | The user's chats with `other` (the other participant) and `latest` (the newest message) attached, most recently active first |
+| `listChats(uid)` | The user's chats that have messages, with `other` (the other participant) and `latest` (the newest message) attached, most recently active first |
 | `getChat(chatId, uid)` | One of the user's chats with `other` attached, or `null` if they aren't in it |
 | `listMessages(chatId)` | A chat's newest 200 messages, oldest first |
 | `sendMessage({ chatId, senderUid, content })` | Validates (1–2000 characters), then sends a message |
