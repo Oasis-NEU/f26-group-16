@@ -50,9 +50,28 @@ The platform is open to any campus event: study sessions, club meetings, open mi
 
 ### Personal schedule page
 
-- Shows all events the user has joined in a list, organized by the date of the event
-- Each entry shows the event picture, title, and start/end times, and jumps to the detail page when clicked
-- The user can remove the event from the join list from this page
+- Shows the events the user has joined on a week calendar (Sunday–Saturday) with hourly timeslots
+    - "‹" / "This week" / "›" buttons move between weeks; the week label (e.g. "Nov 8 – 14") sits next to them
+    - Each event is a block placed at its start/end time. Events without an end time are drawn as 1 hour long. Overlapping events sit side by side
+    - Joined events that overlap each other get a red outline and a ⚠️
+    - Past events are faded, and a red line marks the current time on today's column
+    - The time range is 8 AM–10 PM by default and grows to fit earlier or later events
+    - Hour rows shrink with the window (between 1.25rem and 3rem) so the whole week fits on one screen without scrolling
+    - Below `sm`, one day column shows at a time, picked from a strip of day buttons. A solid dot under a day means it has joined events; a hollow dot means it has suggestions only
+- Each block shows the title and time (tall blocks also show the event picture), and jumps to the detail page when clicked
+    - Short or side-by-side blocks show the title and start time on one line
+    - Hovering a block with the mouse for 0.3s (or focusing it with the keyboard) opens a small details popup next to it: picture (or category glyph), date and time, title, organizer, location, description (up to 4 lines), and any overlap warning
+        - The popup is hoverable: the mouse can move from the block onto it (there's a 150ms grace period for the gap), and it stays open while hovered. It closes once the pointer has left both the block and the popup, or on Escape or scroll/resize. On touch screens a tap goes straight to the detail page
+        - A full-width button at the bottom joins or leaves the event: "＋ Join event" (primary) on suggestions, "Leave event" (secondary) on joined events. It uses the large button style, slightly smaller below `sm`. After joining, the popup stays open and switches to "Leave event"
+        - It resizes with the screen: 18rem wide (never wider than the screen) on phones, `w-80` from `sm`, `w-96` from `lg`, with the picture, padding, and title growing to match. It always stays inside the viewport
+- The user can remove an event from the join list with the × button on its block
+- If the week has no joined events, a status line says so, with a "Jump to your next event" button (or a link to browse events if the user hasn't joined anything)
+- "Suggest events" switch: off by default, held only in page state (not saved in the database or browser storage), so it's off again on every visit
+    - While on, events that fit the user's open time show as dashed blocks in that week, with a "+" button that joins the event
+    - Open time is any time not taken by a joined event (there is no availability table). A suggestion must not overlap a joined event, not be organized by the user, not be joined already, and not have started
+    - At most 8 suggestions per week. Categories the user joins most come first, then the soonest
+    - Suggestions are fetched per week only while the switch is on, and reused when toggling or returning to a week. Past weeks get none
+- Joining and removing update the calendar right away and roll back with an error message if the request fails
 
 ### User profile and settings page
 
@@ -200,6 +219,8 @@ src/
   components/
     EventCard.jsx           # event item in homepage & account profile display
     EventPicture.jsx        # event picture, or the category glyph when there is none
+    WeekCalendar.jsx        # week grid with hourly timeslots for the schedule page
+    EventPopover.jsx        # hover/focus details popup for schedule calendar blocks
     Logo.jsx                # SVG tennis racket logo with wind trails
     menu_bar.jsx            # Top menu bar
     messages_popup.jsx      # Popup view for direct messages
@@ -208,6 +229,8 @@ src/
     supabase.js             # Supabase client (only api.jsx imports it)
     routes.js               # hash routes: path builders, useRoute(), navigate()
     format.js               # dates, "Deleted account" names, category glyphs
+    schedule.js             # schedule helpers: overlaps, conflicts, suggestions, block time labels
+    calendar.js             # week calendar math: week start, day clipping, side-by-side layout
 scripts/
   seed_events.mjs           # example events for testing
   seed_images/              # WebP pictures for the example events (credits in CREDITS.md)
@@ -227,7 +250,7 @@ There's no router library. Pages are picked from the URL hash in `App.jsx`, and 
 | `#/profile` | Your profile |
 | `#/profile/<uid>` | Someone else's profile |
 
-Schedule and profile show a "coming soon" placeholder in `App.jsx` until their pages exist. Replace the placeholder in `currentPage()` when you build them.
+Profile shows a "coming soon" placeholder in `App.jsx` until its page exists. Replace the placeholder in `currentPage()` when you build it.
 
 # Appearance and design
 

@@ -6,6 +6,7 @@ import EditEvent from './pages/edit_event.jsx'
 import EventDetail from './pages/event_detail.jsx'
 import Homepage from './pages/homepage.jsx'
 import LoginPage from './pages/login_page.jsx'
+import Schedule from './pages/schedule.jsx'
 import { HOME_PATH, useRoute } from './utils/routes.js'
 
 function Loading() {
@@ -39,7 +40,7 @@ function currentPage(route, profile) {
     case 'edit-event':
       return <EditEvent key={route.eventId} eventId={route.eventId} profile={profile} />
     case 'schedule':
-      return <ComingSoon icon="🗓️" title="Your schedule" />
+      return <Schedule profile={profile} />
     case 'profile':
       return <ComingSoon icon="👤" title={route.uid && route.uid !== profile.uid ? 'Profiles' : 'Your profile'} />
     default:
