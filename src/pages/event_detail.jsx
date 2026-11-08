@@ -427,8 +427,6 @@ const backLink = (
 export default function EventDetail({ eventId, profile }) {
   const [result, setResult] = useState(null)
   const [retries, setRetries] = useState(0)
-  const [dmBusy, setDmBusy] = useState(false)
-  const [dmError, setDmError] = useState('')
   const [joinChanges, setJoinChanges] = useState(0)
   const { startChat, busy: dmBusy, error: dmError } = useStartChat(profile)
 
