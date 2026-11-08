@@ -105,8 +105,8 @@ CREATE TABLE events(
     start_time BIGINT NOT NULL CHECK (start_time > 0),
     end_time BIGINT,
     location TEXT CHECK (char_length(location) <= 200),
-    organizer_uid TEXT NOT NULL REFERENCES users(uid),
-    category_id TEXT REFERENCES event_categories(category_id),
+    organizer_uid TEXT NOT NULL REFERENCES users(uid) ON UPDATE CASCADE,
+    category_id TEXT REFERENCES event_categories(category_id) ON UPDATE CASCADE,
     picture_data TEXT CHECK (
         picture_data LIKE 'data:image/webp;base64,%'
         AND octet_length(picture_data) <= 13981039
@@ -120,7 +120,7 @@ CREATE TABLE event_comments(
     event_id TEXT NOT NULL REFERENCES events(event_id) ON DELETE CASCADE,
     comment_content TEXT NOT NULL CHECK (char_length(btrim(comment_content)) BETWEEN 1 AND 2000),
     comment_time BIGINT NOT NULL DEFAULT extract(epoch FROM now())::bigint,
-    sender_uid TEXT NOT NULL REFERENCES users(uid),
+    sender_uid TEXT NOT NULL REFERENCES users(uid) ON UPDATE CASCADE,
     -- NULL for main comments; replies only reference the main comment (see trigger below)
     replying_to TEXT,
     CONSTRAINT uc_comment_event UNIQUE (comment_id, event_id),
@@ -149,7 +149,7 @@ CREATE OR REPLACE TRIGGER trg_check_reply_target BEFORE INSERT OR UPDATE ON even
 -- Joined events information (create rows for each user)
 CREATE TABLE joined_events(
     event_id TEXT NOT NULL REFERENCES events(event_id) ON DELETE CASCADE,
-    joiner_uid TEXT NOT NULL REFERENCES users(uid),
+    joiner_uid TEXT NOT NULL REFERENCES users(uid) ON UPDATE CASCADE,
     CONSTRAINT uc_event_joiner UNIQUE (event_id, joiner_uid)
 );
 
@@ -158,7 +158,7 @@ CREATE TABLE chats_list(
     chat_id TEXT NOT NULL,
     -- Defaults to event name; each user can set its own name for reference
     chat_name TEXT NOT NULL CHECK (char_length(btrim(chat_name)) BETWEEN 1 AND 100),
-    user_id TEXT NOT NULL REFERENCES users(uid),
+    user_id TEXT NOT NULL REFERENCES users(uid) ON UPDATE CASCADE,
     CONSTRAINT uc_chat_user UNIQUE (chat_id, user_id)
 );
 
@@ -168,7 +168,7 @@ CREATE TABLE chat_msgs(
     chat_id TEXT NOT NULL, -- Foreign key not used since primary key not used in chats_list (by user instead of by chat)
     msg_content TEXT NOT NULL CHECK (char_length(btrim(msg_content)) BETWEEN 1 AND 2000),
     msg_time BIGINT NOT NULL DEFAULT extract(epoch FROM now())::bigint,
-    sender_uid TEXT NOT NULL REFERENCES users(uid)
+    sender_uid TEXT NOT NULL REFERENCES users(uid) ON UPDATE CASCADE
 );
 
 -- Indexes for common lookups
