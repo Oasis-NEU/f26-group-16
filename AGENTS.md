@@ -46,6 +46,7 @@ The platform is open to any campus event: study sessions, club meetings, open mi
 - "Join event" button with a display of how many people already joined/subscribed
 - Comments with replies
 - "Direct message" button to contact the organizer
+- "Who's going" list of people who joined, each with a message button to chat with them directly (not shown for yourself or deleted accounts)
 - If viewing as the event creator, a button that opens an "edit event" page allowing for modifications of these fields
 
 ### Personal schedule page
@@ -87,7 +88,7 @@ The platform is open to any campus event: study sessions, club meetings, open mi
 - Each chat supports simple text messages, attempt to fetch latest messages every 2 seconds in the page
 - If couldn't connect to server, display a small banner in the popup saying so and retry connection as usual (every 2 seconds)
 - The popup has two views: the chat list, and one open chat with its messages and a text field. Polling only runs while the popup is open
-- The "Direct message" button on the detail page opens the popup on the chat with the organizer, creating it first if needed
+- The "Direct message" button on the detail page opens the popup on the chat with the organizer, creating it first if needed. The message buttons in the "Who's going" list do the same for that person
 - Two users share one chat. A new chat is named after the event it started from, and later messages about other events go in the same chat
 - Deleted accounts show as "Deleted account"; their chats stay readable, but the text field is replaced by a note that you can't reply
 
