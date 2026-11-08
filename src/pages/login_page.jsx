@@ -1,5 +1,6 @@
 import { useId, useState } from 'react'
 import { PASSWORD_MIN, logIn, signUp } from '../api.jsx'
+import Logo from '../components/Logo.jsx'
 import { ErrorMessage, inputClass } from '../components/ui.jsx'
 
 const primaryButton =
@@ -197,10 +198,8 @@ export default function LoginPage({ notice }) {
   return (
     <main className="flex min-h-screen items-center justify-center bg-brand-50 px-4 py-12 sm:px-6">
       <div className="w-full max-w-md">
-        <div className="mb-6 flex items-center justify-center gap-2">
-          <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-brand-500 text-xl" aria-hidden="true">
-            🎾
-          </span>
+        <div className="group mb-6 flex items-center justify-center gap-2">
+          <Logo className="h-10 w-10" />
           <span className="text-2xl font-extrabold tracking-tight text-ink">Rally</span>
         </div>
         <div className="space-y-5 rounded-2xl border border-line bg-surface p-6 shadow-sm sm:p-8">
