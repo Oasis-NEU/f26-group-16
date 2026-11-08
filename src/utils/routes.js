@@ -7,6 +7,7 @@ export const HOME_PATH = '#/'
 export const NEW_EVENT_PATH = '#/event/new'
 export const SCHEDULE_PATH = '#/schedule'
 export const PROFILE_PATH = '#/profile'
+export const SETTINGS_PATH = '#/settings'
 export const eventPath = (eventId) => `#/event/${encodeURIComponent(eventId)}`
 export const editEventPath = (eventId) => `${eventPath(eventId)}/edit`
 export const profilePath = (uid) => `${PROFILE_PATH}/${encodeURIComponent(uid)}`
@@ -20,6 +21,7 @@ export function parseRoute(hash) {
   if (section === 'event' && parts.length === 2) return { page: 'event', eventId: id }
   if (section === 'event' && action === 'edit' && parts.length === 3) return { page: 'edit-event', eventId: id }
   if (section === 'schedule' && parts.length === 1) return { page: 'schedule' }
+  if (section === 'settings' && parts.length === 1) return { page: 'settings' }
   // "#/profile" is the logged-in user; "#/profile/<uid>" is someone else's.
   if (section === 'profile' && parts.length <= 2) return { page: 'profile', uid: id ?? null }
   return { page: 'not-found' }

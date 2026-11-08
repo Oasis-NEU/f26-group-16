@@ -76,11 +76,14 @@ The platform is open to any campus event: study sessions, club meetings, open mi
 
 ### User profile and settings page
 
-- Shows the user profile picture and full name at the center top
-- Grid view of the user's event posts with buttons to edit or delete
-- Account settings button placed right below the profile picture
-  - Settings popup include: change/reset profile picture button, edit full name text field, change password fields (original & new), log out button, delete account button
-- Can view other user's profile page by clicking into the account name on event page and comment page (without edit/account settings button)
+- Accessible through the user profile button in the menu bar
+    - List popup containing "My profile" and "Account settings" buttons
+- User profile page:
+    - Shows the user profile picture and full name at top left, placing profile pic and name side by side
+    - Grid view of the user's event posts 
+        - Edit and delete post buttons if viewing their own profile
+- Account settings page include: change/reset profile picture button, edit full name text field, change password fields (original & new), log out button, delete account button
+- Can view other user's profile page by clicking into the account name on event page, comments, and direct messages
 
 ### Direct messages popup
 
@@ -124,7 +127,10 @@ The platform is open to any campus event: study sessions, club meetings, open mi
     - Authentication handled by Supabase (no password stored)
     - The row is created by a database trigger on sign-up (see [Supabase Auth](#supabase-auth)), so an account can't exist in Supabase Auth without a `users` row
     - If a user is deleted (`is_active` set to false), it is shown as "Deleted account" in places like comments and direct messages
-    - Users can set their own `is_active` to false, but only administrators (SQL editor, Table Editor, or the secret key) can set it back to true
+        - Users can set their own `is_active` to false, but only administrators (SQL editor, Table Editor, or the secret key) can set it back to true
+        - Delete the entry from Supabase auth table so the same email can be used to create a new account (the `trg_delete_auth_user_on_deactivate` trigger does this)
+        - Their events are left out of event listings (homepage, schedule suggestions) but still open by direct link
+        - To restore an account, an administrator re-links the old row to the person's new login (see `docs/auth-setup.md`); `ON UPDATE CASCADE` carries the uid change to every table
     - Backend validation: Picture size ≤ 10MB (compress & encode uploaded file to WebP)
 - Table of event categories
     - Category ID, name
@@ -201,11 +207,14 @@ Auth functions in `src/api.jsx`:
 |---|---|
 | `signUp({ email, fullName, password, confirmPassword })` | Validates, then creates the account. The sign-up trigger creates the `users` row. |
 | `logIn(email, password)` | Logs in. The session is saved in the browser until logout. |
-| `logOut()` | Logs out (for the account settings popup) |
+| `logOut()` | Logs out (menu bar and account settings page) |
 | `onSessionChange(callback)` | Lets `App.jsx` switch between the login page and the app |
 | `getProfile(authId)` | The `users` row for the logged-in account (`uid` = `authId`) |
+| `updateProfile(uid, { fullName, pictureData })` | Changes the name and/or picture (`null` removes it; pictures fit 512x512) and returns the updated row |
+| `changePassword({ currentPassword, newPassword, confirmPassword })` | Checks the current password by logging in again, then sets the new one |
+| `deleteAccount(uid, password)` | Checks the password, sets `is_active` to false (the trigger removes the login), and clears the session |
 
-If `is_active` is false, `App.jsx` logs the user straight back out and shows "This account has been deleted."
+If `is_active` is false, `App.jsx` logs the user straight back out and shows "This account has been deleted." (After a deletion the login itself is gone, so logging in again just says "Wrong email or password".)
 
 Notification functions in `src/api.jsx`:
 
@@ -257,9 +266,12 @@ src/
     event_detail.jsx        # Event detail page
     edit_event.jsx          # Edit event page (also creates new events)
     schedule.jsx            # Personal schedule (joined events) page
-    account_profile.jsx     # Current user profile + account settings popup
+    account_profile.jsx     # User profile: picture, name, and posted events (edit/delete on your own)
+    account_settings.jsx    # Account settings: picture, name, password, log out, delete account
   components/
     EventCard.jsx           # event item in homepage & account profile display
+    Avatar.jsx              # round profile picture, or the name's first letter
+    UserName.jsx            # name linking to the user's profile ("Deleted account" for deleted users)
     EventPicture.jsx        # event picture, or the category glyph when there is none
     WeekCalendar.jsx        # week grid with hourly timeslots for the schedule page
     EventPopover.jsx        # hover/focus details popup for schedule calendar blocks
@@ -297,8 +309,9 @@ There's no router library. Pages are picked from the URL hash in `App.jsx`, and 
 | `#/schedule` | Personal schedule |
 | `#/profile` | Your profile |
 | `#/profile/<uid>` | Someone else's profile |
+| `#/settings` | Account settings |
 
-Profile shows a "coming soon" placeholder in `App.jsx` until its page exists. Replace the placeholder in `currentPage()` when you build it.
+Add new pages as a case in `currentPage()` in `App.jsx`.
 
 # Appearance and design
 

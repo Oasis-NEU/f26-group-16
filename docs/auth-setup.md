@@ -79,15 +79,68 @@ All in `src/api.jsx`:
 |---|---|
 | `signUp({ email, fullName, password, confirmPassword })` | Validates, then creates the account. The trigger above creates the `users` row. |
 | `logIn(email, password)` | Logs in. The session is saved in the browser until logout. |
-| `logOut()` | Logs out (for the account settings popup) |
+| `logOut()` | Logs out (menu bar and account settings page) |
 | `onSessionChange(callback)` | Lets `App.jsx` switch between the login page and the app |
 | `getProfile(authId)` | The `users` row for the logged-in account (`uid` = `authId`) |
+| `updateProfile(uid, { fullName, pictureData })` | Changes the name and/or picture and returns the updated row |
+| `changePassword({ currentPassword, newPassword, confirmPassword })` | Checks the current password by logging in again, then sets the new one |
+| `deleteAccount(uid, password)` | Checks the password, sets `is_active` to false (the trigger below removes the login), and clears the session |
 
 If `is_active` is false, `App.jsx` logs the user straight back out and shows "This account has been deleted."
+
+## Account deletion (run once in the SQL Editor)
+
+Deleting an account in the app sets `users.is_active` to false. This trigger then deletes the Supabase Auth login, so the same email can sign up again. The `users` row stays, so the account's comments and messages show as "Deleted account".
+
+The `ALTER TABLE` lines add `ON UPDATE CASCADE` to every foreign key on `users.uid` (and `event_categories.category_id`), matching `docs/main_schema.sql`. Skip them if your database already has it. Fresh databases get all of this from `main_schema.sql`.
+
+```sql
+CREATE OR REPLACE FUNCTION public.delete_auth_user_on_deactivate() RETURNS trigger
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = '' AS $$
+BEGIN
+    DELETE FROM auth.users WHERE id::text = OLD.uid;
+    RETURN NULL;
+END $$;
+CREATE OR REPLACE TRIGGER trg_delete_auth_user_on_deactivate AFTER UPDATE OF is_active ON public.users
+    FOR EACH ROW WHEN (OLD.is_active AND NOT NEW.is_active)
+    EXECUTE FUNCTION public.delete_auth_user_on_deactivate();
+
+ALTER TABLE events DROP CONSTRAINT IF EXISTS events_organizer_uid_fkey,
+    ADD CONSTRAINT events_organizer_uid_fkey FOREIGN KEY (organizer_uid) REFERENCES users(uid) ON UPDATE CASCADE;
+ALTER TABLE events DROP CONSTRAINT IF EXISTS events_category_id_fkey,
+    ADD CONSTRAINT events_category_id_fkey FOREIGN KEY (category_id) REFERENCES event_categories(category_id) ON UPDATE CASCADE;
+ALTER TABLE event_comments DROP CONSTRAINT IF EXISTS event_comments_sender_uid_fkey,
+    ADD CONSTRAINT event_comments_sender_uid_fkey FOREIGN KEY (sender_uid) REFERENCES users(uid) ON UPDATE CASCADE;
+ALTER TABLE joined_events DROP CONSTRAINT IF EXISTS joined_events_joiner_uid_fkey,
+    ADD CONSTRAINT joined_events_joiner_uid_fkey FOREIGN KEY (joiner_uid) REFERENCES users(uid) ON UPDATE CASCADE;
+ALTER TABLE chats_list DROP CONSTRAINT IF EXISTS chats_list_user_id_fkey,
+    ADD CONSTRAINT chats_list_user_id_fkey FOREIGN KEY (user_id) REFERENCES users(uid) ON UPDATE CASCADE;
+ALTER TABLE chat_msgs DROP CONSTRAINT IF EXISTS chat_msgs_sender_uid_fkey,
+    ADD CONSTRAINT chat_msgs_sender_uid_fkey FOREIGN KEY (sender_uid) REFERENCES users(uid) ON UPDATE CASCADE;
+ALTER TABLE notifications DROP CONSTRAINT IF EXISTS notifications_recipient_uid_fkey,
+    ADD CONSTRAINT notifications_recipient_uid_fkey FOREIGN KEY (recipient_uid) REFERENCES users(uid) ON UPDATE CASCADE;
+ALTER TABLE notifications DROP CONSTRAINT IF EXISTS notifications_actor_uid_fkey,
+    ADD CONSTRAINT notifications_actor_uid_fkey FOREIGN KEY (actor_uid) REFERENCES users(uid) ON UPDATE CASCADE;
+```
+
+### Restoring a deleted account
+
+Setting `is_active` back to true isn't enough, because the login is gone. Instead:
+
+1. The person signs up again with their email. That creates a new login and a new, empty `users` row.
+2. Copy the new uid from Authentication → Users, then in the SQL Editor:
+
+```sql
+DELETE FROM users WHERE uid = '<new uid>';
+UPDATE users SET uid = '<new uid>', is_active = true WHERE uid = '<old uid>';
+```
+
+`ON UPDATE CASCADE` moves their events, comments, joins, chats, and notifications to the new uid. The `DELETE` fails if they already posted, commented, joined, or messaged with the new account. Move or delete those rows first.
 
 ## Troubleshooting
 
 - **"Database error saving new user"**: the trigger failed. Check that step 2 ran, and that `users` has no other `NOT NULL` column the trigger doesn't fill.
 - **Sign-up says "Check your inbox" but no email arrives**: Confirm email is still on (step 1).
 - **"Email address … is invalid"**: Supabase rejects domains that can't receive mail (e.g. `test.local`). Use a real address.
+- **Deleting an account works, but the email still says "already has an account"**: the account deletion trigger above hasn't been run.
 - **"Your account isn't set up yet"**: the account was created before the trigger existed, so it has no `users` row. Delete it in Authentication → Users and sign up again.

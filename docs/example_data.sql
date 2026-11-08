@@ -1,11 +1,10 @@
 DO $$
 DECLARE
-    -- Main production database
-    example_user TEXT := 'b5e9d46c-bd13-4feb-b27c-4cb5f2301c8a';
-    -- Example database
-    -- example_user TEXT := 'dad2b8f3-0f35-4d51-abde-4f6eed729975';
+    example_user TEXT := (SELECT id FROM auth.users WHERE email = 'user@example.com' LIMIT 1);
 BEGIN
-
+IF example_user IS NULL THEN
+    RAISE EXCEPTION 'No user with email "user@example.com"';
+END IF;
 -- Example user
 INSERT INTO users(uid, full_name, is_active) 
 VALUES (example_user, 'Example user 1', true);

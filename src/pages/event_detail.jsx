@@ -13,21 +13,12 @@ import {
 } from '../api.jsx'
 import Avatar from '../components/Avatar.jsx'
 import EventPicture from '../components/EventPicture.jsx'
+import UserName from '../components/UserName.jsx'
 import { ErrorMessage, Notice, inputClass, primaryButton, secondaryButton, smallButton } from '../components/ui.jsx'
 import { openChat } from '../utils/chat_events.js'
-import { displayName, formatEventTime, formatTimestamp } from '../utils/format.js'
-import { HOME_PATH, editEventPath, profilePath } from '../utils/routes.js'
+import { formatEventTime, formatTimestamp } from '../utils/format.js'
+import { HOME_PATH, editEventPath } from '../utils/routes.js'
 import { showToast } from '../utils/toast.js'
-
-// Links to the user's profile, or plain text for deleted accounts.
-function UserName({ user, className = '' }) {
-  if (!user?.is_active) return <span className={`text-muted ${className}`}>{displayName(user)}</span>
-  return (
-    <a href={profilePath(user.uid)} className={`text-ink hover:text-brand-600 hover:underline ${className}`}>
-      {user.full_name}
-    </a>
-  )
-}
 
 function InfoRow({ icon, label, children }) {
   return (
