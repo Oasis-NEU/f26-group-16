@@ -1,7 +1,9 @@
-import { useEffect, useRef, useState } from 'react'
+import { useRef, useState } from 'react'
 import { logOut } from '../api.jsx'
 import { HOME_PATH, PROFILE_PATH, SCHEDULE_PATH } from '../utils/routes.js'
+import { useDismiss } from '../utils/use_dismiss.js'
 import Logo from './Logo.jsx'
+import MessagesPopup from './messages_popup.jsx'
 
 const NAV_ITEMS = [
   { page: 'home', label: 'Home', icon: '🏠', href: HOME_PATH },
@@ -10,52 +12,6 @@ const NAV_ITEMS = [
 ]
 
 const popupClass = 'absolute right-0 top-12 z-30 rounded-2xl border border-line bg-surface shadow-lg'
-
-// Closes a popup on Escape or on a click outside `ref`.
-function useDismiss(open, setOpen, ref) {
-  useEffect(() => {
-    if (!open) return
-    const onPointerDown = (event) => {
-      if (!ref.current?.contains(event.target)) setOpen(false)
-    }
-    const onKeyDown = (event) => {
-      if (event.key === 'Escape') setOpen(false)
-    }
-    document.addEventListener('pointerdown', onPointerDown)
-    document.addEventListener('keydown', onKeyDown)
-    return () => {
-      document.removeEventListener('pointerdown', onPointerDown)
-      document.removeEventListener('keydown', onKeyDown)
-    }
-  }, [open, setOpen, ref])
-}
-
-// Placeholder until messages_popup.jsx lands.
-function MessagesButton() {
-  const [open, setOpen] = useState(false)
-  const ref = useRef(null)
-  useDismiss(open, setOpen, ref)
-
-  return (
-    <div ref={ref} className="relative">
-      <button
-        type="button"
-        onClick={() => setOpen((o) => !o)}
-        aria-label="Direct messages"
-        aria-expanded={open}
-        className="flex h-10 w-10 items-center justify-center rounded-xl border border-line bg-surface text-lg hover:bg-brand-50"
-      >
-        <span aria-hidden="true">💬</span>
-      </button>
-      {open && (
-        <div role="dialog" aria-label="Direct messages" className={`${popupClass} w-72 max-w-[calc(100vw-2rem)] p-5`}>
-          <p className="font-semibold text-ink">Direct messages</p>
-          <p className="mt-1 text-sm text-muted">Chatting with organizers is coming soon.</p>
-        </div>
-      )}
-    </div>
-  )
-}
 
 // Log out lives here until the account settings popup takes it over.
 function useLogOut() {
@@ -125,7 +81,7 @@ function MobileMenu({ currentPage }) {
 
 // Top menu bar: logo on the left; messages button, then navigation, on the
 // right. Below `md` the navigation collapses into a ☰ menu.
-export default function MenuBar({ currentPage }) {
+export default function MenuBar({ currentPage, profile }) {
   const [busy, handleLogOut] = useLogOut()
 
   return (
@@ -136,7 +92,7 @@ export default function MenuBar({ currentPage }) {
           <span className="text-xl font-extrabold tracking-tight text-ink">Rally</span>
         </a>
         <div className="flex items-center gap-2">
-          <MessagesButton />
+          <MessagesPopup profile={profile} />
           <nav aria-label="Main" className="hidden items-center gap-1 md:flex">
             {NAV_ITEMS.map((item) => (
               <a

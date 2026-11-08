@@ -67,6 +67,10 @@ The platform is open to any campus event: study sessions, club meetings, open mi
 - List of messages displayed in a menu bar popup on homepage, displaying the chat name and most recent message for each entry
 - Each chat supports simple text messages, attempt to fetch latest messages every 2 seconds in the page
 - If couldn't connect to server, display a small banner in the popup saying so and retry connection as usual (every 2 seconds)
+- The popup has two views: the chat list, and one open chat with its messages and a text field. Polling only runs while the popup is open
+- The "Direct message" button on the detail page opens the popup on the chat with the organizer, creating it first if needed
+- Two users share one chat. A new chat is named after the event it started from, and later messages about other events go in the same chat
+- Deleted accounts show as "Deleted account"; their chats stay readable, but the text field is replaced by a note that you can't reply
 
 ### Top menu bar
 
@@ -163,6 +167,16 @@ Auth functions in `src/api.jsx`:
 
 If `is_active` is false, `App.jsx` logs the user straight back out and shows "This account has been deleted."
 
+Direct message functions in `src/api.jsx`:
+
+| Function | What it does |
+|---|---|
+| `listChats(uid)` | The user's chats with `other` (the other participant) and `latest` (the newest message) attached, most recently active first |
+| `getChat(chatId, uid)` | One of the user's chats with `other` attached, or `null` if they aren't in it |
+| `listMessages(chatId)` | A chat's newest 200 messages, oldest first |
+| `sendMessage({ chatId, senderUid, content })` | Validates (1–2000 characters), then sends a message |
+| `findOrCreateChat({ uid, otherUid, chatName })` | Returns the id of the two users' chat, creating it if needed. Adds your own `chats_list` row first, because RLS only lets chat members add other participants |
+
 ## Stack
 
 - React 19 (function components and hooks only)
@@ -202,12 +216,14 @@ src/
     EventPicture.jsx        # event picture, or the category glyph when there is none
     Logo.jsx                # SVG tennis racket logo with wind trails
     menu_bar.jsx            # Top menu bar
-    messages_popup.jsx      # Popup view for direct messages
+    messages_popup.jsx      # Messages button + popup: chat list, open chat, 2-second polling
     ui.jsx                  # shared button/input styles, ErrorMessage, Notice
   utils/
     supabase.js             # Supabase client (only api.jsx imports it)
     routes.js               # hash routes: path builders, useRoute(), navigate()
     format.js               # dates, "Deleted account" names, category glyphs
+    chat_events.js          # openChat(chatId): opens the messages popup from any page
+    use_dismiss.js          # useDismiss(): closes a popup on Escape or an outside click
 scripts/
   seed_events.mjs           # example events for testing
   seed_images/              # WebP pictures for the example events (credits in CREDITS.md)

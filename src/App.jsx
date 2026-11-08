@@ -63,7 +63,7 @@ function Shell({ profile }) {
 
   return (
     <div className="min-h-screen bg-page">
-      <MenuBar currentPage={route.page} />
+      <MenuBar currentPage={route.page} profile={profile} />
       <main className="mx-auto max-w-6xl px-4 py-10 sm:px-6 sm:py-12">{currentPage(route, profile)}</main>
     </div>
   )
