@@ -49,7 +49,7 @@ CREATE TABLE users(
 
 -- Only administrators can reactivate a deleted account. App requests run as the
 -- anon/authenticated roles; the SQL editor, Table Editor, and secret key don't.
-CREATE FUNCTION prevent_user_reactivation() RETURNS trigger
+CREATE OR REPLACE FUNCTION prevent_user_reactivation() RETURNS trigger
 LANGUAGE plpgsql SET search_path = public AS $$
 BEGIN
     IF OLD.is_active = false AND NEW.is_active = true
@@ -58,7 +58,7 @@ BEGIN
     END IF;
     RETURN NEW;
 END $$;
-CREATE TRIGGER trg_prevent_user_reactivation BEFORE UPDATE OF is_active ON users
+CREATE OR REPLACE TRIGGER trg_prevent_user_reactivation BEFORE UPDATE OF is_active ON users
     FOR EACH ROW EXECUTE FUNCTION prevent_user_reactivation();
 
 -- Auto create user from Supabase auth
@@ -77,7 +77,7 @@ BEGIN
   RETURN new;
 END;
 $$;
-CREATE TRIGGER on_auth_user_created
+CREATE OR REPLACE TRIGGER on_auth_user_created
   AFTER INSERT ON auth.users
   FOR EACH ROW EXECUTE FUNCTION public.handle_new_user();
 
@@ -131,7 +131,7 @@ CREATE TABLE event_comments(
 );
 
 -- Reject replies to replies (keeps threads one level deep)
-CREATE FUNCTION check_reply_target() RETURNS trigger
+CREATE OR REPLACE FUNCTION check_reply_target() RETURNS trigger
 LANGUAGE plpgsql SET search_path = public AS $$
 BEGIN
     IF NEW.replying_to IS NOT NULL AND EXISTS (
@@ -143,7 +143,7 @@ BEGIN
     RETURN NEW;
 END $$;
 
-CREATE TRIGGER trg_check_reply_target BEFORE INSERT OR UPDATE ON event_comments
+CREATE OR REPLACE TRIGGER trg_check_reply_target BEFORE INSERT OR UPDATE ON event_comments
     FOR EACH ROW EXECUTE FUNCTION check_reply_target();
 
 -- Joined events information (create rows for each user)
@@ -214,7 +214,7 @@ CREATE POLICY joined_write_own ON joined_events FOR ALL TO authenticated
     WITH CHECK (joiner_uid = (SELECT auth.uid())::text);
 
 -- SECURITY DEFINER so chat policies can check membership without recursing into chats_list RLS
-CREATE FUNCTION is_chat_member(target_chat TEXT) RETURNS boolean
+CREATE OR REPLACE FUNCTION is_chat_member(target_chat TEXT) RETURNS boolean
 LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
     SELECT EXISTS (
         SELECT 1 FROM chats_list
