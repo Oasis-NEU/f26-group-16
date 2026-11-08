@@ -1,7 +1,8 @@
 import { useRef, useState } from 'react'
 import { logOut } from '../api.jsx'
-import { HOME_PATH, PROFILE_PATH, SCHEDULE_PATH } from '../utils/routes.js'
+import { HOME_PATH, PROFILE_PATH, SCHEDULE_PATH, SETTINGS_PATH } from '../utils/routes.js'
 import { useDismiss } from '../utils/use_dismiss.js'
+import Avatar from './Avatar.jsx'
 import Logo from './Logo.jsx'
 import MessagesPopup from './messages_popup.jsx'
 import NotificationsPopup from './notifications_popup.jsx'
@@ -9,12 +10,17 @@ import NotificationsPopup from './notifications_popup.jsx'
 const NAV_ITEMS = [
   { page: 'home', label: 'Home', icon: '🏠', href: HOME_PATH },
   { page: 'schedule', label: 'Schedule', icon: '🗓️', href: SCHEDULE_PATH },
-  { page: 'profile', label: 'Profile', icon: '👤', href: PROFILE_PATH },
+]
+
+// Links in the profile menu (and the ☰ menu on phones).
+const PROFILE_ITEMS = [
+  { page: 'profile', label: 'My profile', icon: '👤', href: PROFILE_PATH },
+  { page: 'settings', label: 'Account settings', icon: '⚙️', href: SETTINGS_PATH },
 ]
 
 const popupClass = 'absolute right-0 top-12 z-30 rounded-2xl border border-line bg-surface shadow-lg'
 
-// Log out lives here until the account settings popup takes it over.
+// Log out is here and on the account settings page.
 function useLogOut() {
   const [busy, setBusy] = useState(false)
   const handleLogOut = async () => {
@@ -33,6 +39,52 @@ function navLinkClass(active) {
   return `flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-semibold ${
     active ? 'bg-brand-50 text-brand-600' : 'text-muted hover:bg-brand-50 hover:text-ink'
   }`
+}
+
+function MenuLink({ item, currentPage, onClick }) {
+  const active = currentPage === item.page
+  return (
+    <a href={item.href} onClick={onClick} aria-current={active ? 'page' : undefined} className={navLinkClass(active)}>
+      <span aria-hidden="true">{item.icon}</span>
+      {item.label}
+    </a>
+  )
+}
+
+const isProfilePage = (page) => PROFILE_ITEMS.some((item) => item.page === page)
+
+// "Profile" button with the user's picture. Opens a list with "My profile" and
+// "Account settings".
+function ProfileMenu({ currentPage, profile }) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef(null)
+  useDismiss(open, setOpen, ref)
+  const active = isProfilePage(currentPage)
+
+  return (
+    <div ref={ref} className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        aria-expanded={open}
+        aria-haspopup="true"
+        className={`${navLinkClass(active)} py-1.5`}
+      >
+        <Avatar user={profile} className="h-7 w-7 text-xs" />
+        Profile
+        <span aria-hidden="true" className="text-xs">
+          ▾
+        </span>
+      </button>
+      {open && (
+        <div className={`${popupClass} w-56 p-2`}>
+          {PROFILE_ITEMS.map((item) => (
+            <MenuLink key={item.page} item={item} currentPage={currentPage} onClick={() => setOpen(false)} />
+          ))}
+        </div>
+      )}
+    </div>
+  )
 }
 
 function MobileMenu({ currentPage }) {
@@ -54,17 +106,8 @@ function MobileMenu({ currentPage }) {
       </button>
       {open && (
         <nav aria-label="Main" className={`${popupClass} w-56 p-2`}>
-          {NAV_ITEMS.map((item) => (
-            <a
-              key={item.page}
-              href={item.href}
-              onClick={() => setOpen(false)}
-              aria-current={currentPage === item.page ? 'page' : undefined}
-              className={navLinkClass(currentPage === item.page)}
-            >
-              <span aria-hidden="true">{item.icon}</span>
-              {item.label}
-            </a>
+          {[...NAV_ITEMS, ...PROFILE_ITEMS].map((item) => (
+            <MenuLink key={item.page} item={item} currentPage={currentPage} onClick={() => setOpen(false)} />
           ))}
           <button
             type="button"
@@ -97,16 +140,9 @@ export default function MenuBar({ currentPage, profile }) {
           <MessagesPopup profile={profile} />
           <nav aria-label="Main" className="hidden items-center gap-1 md:flex">
             {NAV_ITEMS.map((item) => (
-              <a
-                key={item.page}
-                href={item.href}
-                aria-current={currentPage === item.page ? 'page' : undefined}
-                className={navLinkClass(currentPage === item.page)}
-              >
-                <span aria-hidden="true">{item.icon}</span>
-                {item.label}
-              </a>
+              <MenuLink key={item.page} item={item} currentPage={currentPage} />
             ))}
+            <ProfileMenu currentPage={currentPage} profile={profile} />
             <button
               type="button"
               onClick={handleLogOut}

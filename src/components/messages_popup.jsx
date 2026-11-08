@@ -5,6 +5,7 @@ import { displayName, formatTimestamp } from '../utils/format.js'
 import { useDismiss } from '../utils/use_dismiss.js'
 import { usePolling } from '../utils/use_polling.js'
 import { ConnectionBanner, ErrorMessage, PopupNote, inputClass, popupPanelClass } from './ui.jsx'
+import UserName from './UserName.jsx'
 
 const POLL_MS = 2000
 
@@ -126,7 +127,8 @@ function MessageForm({ chatId, uid, onSent }) {
   )
 }
 
-function ChatView({ chatId, uid, onBack }) {
+// `onLeave` closes the popup when the name link opens the other person's profile.
+function ChatView({ chatId, uid, onBack, onLeave }) {
   const load = useCallback(async () => {
     const [chat, messages] = await Promise.all([getChat(chatId, uid), listMessages(chatId)])
     return { chat, messages }
@@ -148,7 +150,9 @@ function ChatView({ chatId, uid, onBack }) {
         {chat && (
           <div className="min-w-0">
             <h2 className="truncate font-bold text-ink">{chat.chat_name}</h2>
-            <p className="truncate text-xs text-muted">{displayName(chat.other)}</p>
+            <p className="truncate text-xs">
+              <UserName user={chat.other} onClick={onLeave} />
+            </p>
           </div>
         )}
       </div>
@@ -197,7 +201,7 @@ export default function MessagesPopup({ profile }) {
       {open && (
         <div role="dialog" aria-label="Direct messages" className={popupPanelClass}>
           {chatId ? (
-            <ChatView key={chatId} chatId={chatId} uid={profile.uid} onBack={() => setChatId(null)} />
+            <ChatView key={chatId} chatId={chatId} uid={profile.uid} onBack={() => setChatId(null)} onLeave={() => setOpen(false)} />
           ) : (
             <ChatList profile={profile} onSelect={setChatId} />
           )}

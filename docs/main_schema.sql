@@ -23,6 +23,7 @@ DROP TABLE IF EXISTS chat_msgs_example CASCADE;
 DROP FUNCTION IF EXISTS public.handle_new_user() CASCADE;
 DROP FUNCTION IF EXISTS public.notify_event_joined() CASCADE;
 DROP FUNCTION IF EXISTS public.prevent_user_reactivation() CASCADE;
+DROP FUNCTION IF EXISTS public.delete_auth_user_on_deactivate() CASCADE;
 DROP FUNCTION IF EXISTS public.check_reply_target() CASCADE;
 DROP FUNCTION IF EXISTS public.is_chat_member(TEXT) CASCADE;
 
@@ -60,6 +61,21 @@ BEGIN
 END $$;
 CREATE OR REPLACE TRIGGER trg_prevent_user_reactivation BEFORE UPDATE OF is_active ON users
     FOR EACH ROW EXECUTE FUNCTION prevent_user_reactivation();
+
+-- Deleting an account (is_active true -> false) also deletes its Supabase Auth
+-- login, so the same email can sign up again. The users row stays, so the
+-- account's comments and messages still show as "Deleted account".
+-- SECURITY DEFINER because app requests can't write to auth.users. OLD.uid is
+-- the login to remove, even if an admin changes uid in the same update.
+CREATE OR REPLACE FUNCTION public.delete_auth_user_on_deactivate() RETURNS trigger
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = '' AS $$
+BEGIN
+    DELETE FROM auth.users WHERE id::text = OLD.uid;
+    RETURN NULL;
+END $$;
+CREATE OR REPLACE TRIGGER trg_delete_auth_user_on_deactivate AFTER UPDATE OF is_active ON public.users
+    FOR EACH ROW WHEN (OLD.is_active AND NOT NEW.is_active)
+    EXECUTE FUNCTION public.delete_auth_user_on_deactivate();
 
 -- Auto create user from Supabase auth
 CREATE OR REPLACE FUNCTION public.handle_new_user()
@@ -242,8 +258,8 @@ CREATE POLICY msgs_insert ON chat_msgs FOR INSERT TO authenticated
 -- Notifications shown in the menu bar inbox
 CREATE TABLE notifications(
     notification_id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
-    recipient_uid TEXT NOT NULL REFERENCES users(uid),
-    actor_uid TEXT NOT NULL REFERENCES users(uid),
+    recipient_uid TEXT NOT NULL REFERENCES users(uid) ON UPDATE CASCADE,
+    actor_uid TEXT NOT NULL REFERENCES users(uid) ON UPDATE CASCADE,
     event_id TEXT NOT NULL REFERENCES events(event_id) ON DELETE CASCADE,
     notification_type TEXT NOT NULL CHECK (notification_type IN ('event_joined')),
     create_time BIGINT NOT NULL DEFAULT extract(epoch FROM now())::bigint,

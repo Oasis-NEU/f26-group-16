@@ -4,8 +4,8 @@
 -- Notifications shown in the menu bar inbox
 CREATE TABLE notifications(
     notification_id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
-    recipient_uid TEXT NOT NULL REFERENCES users(uid),
-    actor_uid TEXT NOT NULL REFERENCES users(uid),
+    recipient_uid TEXT NOT NULL REFERENCES users(uid) ON UPDATE CASCADE,
+    actor_uid TEXT NOT NULL REFERENCES users(uid) ON UPDATE CASCADE,
     event_id TEXT NOT NULL REFERENCES events(event_id) ON DELETE CASCADE,
     notification_type TEXT NOT NULL CHECK (notification_type IN ('event_joined')),
     create_time BIGINT NOT NULL DEFAULT extract(epoch FROM now())::bigint,

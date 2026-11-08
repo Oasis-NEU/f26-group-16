@@ -179,7 +179,60 @@ export async function getProfile(authId) {
   return getUser(authId)
 }
 
+// Checks the logged-in user's password by logging in again with it. Supabase's
+// updateUser doesn't ask for the current password, so the settings page uses
+// this before changing the password or deleting the account.
+async function verifyPassword(password) {
+  check(password, 'Enter your current password.')
+  const { data, error } = await supabase.auth.getUser()
+  if (error) throw toError(error)
+  const { error: signInError } = await supabase.auth.signInWithPassword({ email: data.user.email, password })
+  if (signInError?.message === 'Invalid login credentials') throw new Error('Your current password is wrong.')
+  if (signInError) throw toError(signInError)
+}
+
+export async function changePassword({ currentPassword, newPassword, confirmPassword }) {
+  check(currentPassword, 'Enter your current password.')
+  check(newPassword?.length >= PASSWORD_MIN, `New password needs at least ${PASSWORD_MIN} characters.`)
+  check(newPassword === confirmPassword, 'New passwords don’t match.')
+  check(newPassword !== currentPassword, 'Pick a password you aren’t using now.')
+  await verifyPassword(currentPassword)
+  const { error } = await supabase.auth.updateUser({ password: newPassword })
+  if (error) throw toError(error)
+}
+
+// Marks the account deleted (is_active = false). A database trigger then
+// removes its Supabase Auth login so the email can sign up again, which ends
+// the session on the server, so this only clears it in the browser.
+export async function deleteAccount(uid, password) {
+  check(uid, 'Missing account.')
+  await verifyPassword(password)
+  unwrap(await supabase.from('users').update({ is_active: false }).eq('uid', uid))
+  await supabase.auth.signOut({ scope: 'local' })
+}
+
 // ---------- users ----------
+
+// Profile pictures are scaled to fit 512x512: every user fetch includes them.
+export const PROFILE_PIC_MAX = 512
+
+// Only the fields passed in are changed. `pictureData: null` removes the picture.
+export async function updateProfile(uid, { fullName, pictureData } = {}) {
+  check(uid, 'Missing account.')
+  const row = {}
+  if (fullName !== undefined) {
+    const name = fullName?.trim() ?? ''
+    check(name, 'Enter your full name.')
+    check(name.length <= NAME_MAX, `Name must be ${NAME_MAX} characters or less.`)
+    row.full_name = name
+  }
+  if (pictureData !== undefined) {
+    if (pictureData !== null) validateImageDataUrl(pictureData)
+    row.profile_pic_data = pictureData
+  }
+  check(Object.keys(row).length > 0, 'Nothing to save.')
+  return unwrap(await supabase.from('users').update(row).eq('uid', uid).select(USER_COLUMNS).single())
+}
 
 export async function getUser(uid) {
   return unwrap(await supabase.from('users').select(USER_COLUMNS).eq('uid', uid).maybeSingle())
@@ -198,10 +251,15 @@ export async function listCategories() {
 
 // ---------- events ----------
 
+// Same shape as EVENT_COLUMNS, but the inner join lets listings filter out
+// events whose organizer deleted their account.
+const ACTIVE_EVENT_COLUMNS =
+  '*, organizer:users!inner(uid, full_name, is_active), category:event_categories(category_id, name)'
+
 // Soonest first. Filters are optional: categoryId, and a [from, to] window on
-// start_time.
+// start_time. Events by deleted accounts are left out (they still open by link).
 export async function listEvents({ categoryId, from, to } = {}) {
-  let query = supabase.from('events').select(EVENT_COLUMNS)
+  let query = supabase.from('events').select(ACTIVE_EVENT_COLUMNS).eq('organizer.is_active', true)
   if (categoryId) query = query.eq('category_id', categoryId)
   if (from != null) query = query.gte('start_time', from)
   if (to != null) query = query.lte('start_time', to)

@@ -128,7 +128,9 @@ The platform is open to any campus event: study sessions, club meetings, open mi
     - The row is created by a database trigger on sign-up (see [Supabase Auth](#supabase-auth)), so an account can't exist in Supabase Auth without a `users` row
     - If a user is deleted (`is_active` set to false), it is shown as "Deleted account" in places like comments and direct messages
         - Users can set their own `is_active` to false, but only administrators (SQL editor, Table Editor, or the secret key) can set it back to true
-        - Delete the entry from Supabase auth table so the same email can be used to create a new account
+        - Delete the entry from Supabase auth table so the same email can be used to create a new account (the `trg_delete_auth_user_on_deactivate` trigger does this)
+        - Their events are left out of event listings (homepage, schedule suggestions) but still open by direct link
+        - To restore an account, an administrator re-links the old row to the person's new login (see `docs/auth-setup.md`); `ON UPDATE CASCADE` carries the uid change to every table
     - Backend validation: Picture size ≤ 10MB (compress & encode uploaded file to WebP)
 - Table of event categories
     - Category ID, name
@@ -205,11 +207,14 @@ Auth functions in `src/api.jsx`:
 |---|---|
 | `signUp({ email, fullName, password, confirmPassword })` | Validates, then creates the account. The sign-up trigger creates the `users` row. |
 | `logIn(email, password)` | Logs in. The session is saved in the browser until logout. |
-| `logOut()` | Logs out (for the account settings popup) |
+| `logOut()` | Logs out (menu bar and account settings page) |
 | `onSessionChange(callback)` | Lets `App.jsx` switch between the login page and the app |
 | `getProfile(authId)` | The `users` row for the logged-in account (`uid` = `authId`) |
+| `updateProfile(uid, { fullName, pictureData })` | Changes the name and/or picture (`null` removes it; pictures fit 512x512) and returns the updated row |
+| `changePassword({ currentPassword, newPassword, confirmPassword })` | Checks the current password by logging in again, then sets the new one |
+| `deleteAccount(uid, password)` | Checks the password, sets `is_active` to false (the trigger removes the login), and clears the session |
 
-If `is_active` is false, `App.jsx` logs the user straight back out and shows "This account has been deleted."
+If `is_active` is false, `App.jsx` logs the user straight back out and shows "This account has been deleted." (After a deletion the login itself is gone, so logging in again just says "Wrong email or password".)
 
 Notification functions in `src/api.jsx`:
 
@@ -261,9 +266,12 @@ src/
     event_detail.jsx        # Event detail page
     edit_event.jsx          # Edit event page (also creates new events)
     schedule.jsx            # Personal schedule (joined events) page
-    account_profile.jsx     # Current user profile + account settings popup
+    account_profile.jsx     # User profile: picture, name, and posted events (edit/delete on your own)
+    account_settings.jsx    # Account settings: picture, name, password, log out, delete account
   components/
     EventCard.jsx           # event item in homepage & account profile display
+    Avatar.jsx              # round profile picture, or the name's first letter
+    UserName.jsx            # name linking to the user's profile ("Deleted account" for deleted users)
     EventPicture.jsx        # event picture, or the category glyph when there is none
     WeekCalendar.jsx        # week grid with hourly timeslots for the schedule page
     EventPopover.jsx        # hover/focus details popup for schedule calendar blocks
@@ -301,8 +309,9 @@ There's no router library. Pages are picked from the URL hash in `App.jsx`, and 
 | `#/schedule` | Personal schedule |
 | `#/profile` | Your profile |
 | `#/profile/<uid>` | Someone else's profile |
+| `#/settings` | Account settings |
 
-Profile shows a "coming soon" placeholder in `App.jsx` until its page exists. Replace the placeholder in `currentPage()` when you build it.
+Add new pages as a case in `currentPage()` in `App.jsx`.
 
 # Appearance and design
 
