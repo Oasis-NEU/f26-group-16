@@ -41,3 +41,9 @@ export function useRoute() {
 export function navigate(path) {
   window.location.hash = path
 }
+
+// Drops the route from the URL without adding a history entry, so the next
+// page shown is the homepage.
+export function clearRoute() {
+  window.history.replaceState(null, '', window.location.pathname + window.location.search)
+}

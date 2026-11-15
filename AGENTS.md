@@ -30,6 +30,7 @@ The platform is open to any campus event: study sessions, club meetings, open mi
 - Prompt for the email and password
 - If user is deleted (`is_active` is false), display an error message saying so
 - Use session token (keep login state until manually logged out)
+- Logging out clears the page from the URL, so the next login starts on the homepage. A shared link opened while logged out is kept, so logging in goes straight to it
 
 ### Homepage
 

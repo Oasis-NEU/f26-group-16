@@ -10,7 +10,7 @@ import EventDetail from './pages/event_detail.jsx'
 import Homepage from './pages/homepage.jsx'
 import LoginPage from './pages/login_page.jsx'
 import Schedule from './pages/schedule.jsx'
-import { HOME_PATH, useRoute } from './utils/routes.js'
+import { HOME_PATH, clearRoute, useRoute } from './utils/routes.js'
 
 function Loading() {
   return (
@@ -77,7 +77,17 @@ function App() {
   const [loaded, setLoaded] = useState(null)
   const [notice, setNotice] = useState('')
 
-  useEffect(() => onSessionChange(setSession), [])
+  useEffect(
+    () =>
+      onSessionChange((next, event) => {
+        // Logging out (from any page, or a deleted account being sent back)
+        // forgets the page, so the next login starts on the homepage. A
+        // logged-out visitor opening a shared link keeps it.
+        if (event === 'SIGNED_OUT') clearRoute()
+        setSession(next)
+      }),
+    [],
+  )
 
   const authId = session?.user.id
   const profile = authId && loaded?.authId === authId ? loaded.row : null

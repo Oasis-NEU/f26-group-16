@@ -179,9 +179,10 @@ export async function logOut() {
 }
 
 // Calls back with the current session right away, then on every login/logout.
+// The second argument is Supabase's event name, e.g. 'SIGNED_OUT'.
 // Returns a function that stops listening.
 export function onSessionChange(callback) {
-  const { data } = supabase.auth.onAuthStateChange((_event, session) => callback(session))
+  const { data } = supabase.auth.onAuthStateChange((event, session) => callback(session, event))
   return () => data.subscription.unsubscribe()
 }
 
