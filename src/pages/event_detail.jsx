@@ -15,7 +15,7 @@ import EventPicture from '../components/EventPicture.jsx'
 import UserName from '../components/UserName.jsx'
 import { ErrorMessage, Notice, inputClass, primaryButton, secondaryButton, smallButton } from '../components/ui.jsx'
 import { joinedCount } from '../utils/capacity.js'
-import { openChat } from '../utils/chat_events.js'
+import { openChat, openGroupChat } from '../utils/chat_events.js'
 import { formatEventTime, formatTimestamp } from '../utils/format.js'
 import { HOME_PATH, editEventPath } from '../utils/routes.js'
 import { showToast } from '../utils/toast.js'
@@ -278,6 +278,32 @@ function JoinButton({ eventId, profile, initialCount, initialJoined, max, onChan
   )
 }
 
+// Opens the event's group chat in the messages popup. Only the organizer and
+// people who joined see it; it rechecks after joining or leaving (`refreshKey`).
+function GroupChatButton({ eventId, profile, isOrganizer, refreshKey }) {
+  const [joined, setJoined] = useState(false)
+
+  useEffect(() => {
+    if (isOrganizer) return
+    let cancelled = false
+    // If the check fails, the button just stays hidden; the rest of the page still works.
+    hasJoined(eventId, profile.uid).then(
+      (result) => !cancelled && setJoined(result),
+      () => {},
+    )
+    return () => {
+      cancelled = true
+    }
+  }, [eventId, profile.uid, isOrganizer, refreshKey])
+
+  if (!isOrganizer && !joined) return null
+  return (
+    <button type="button" onClick={() => openGroupChat(eventId)} className={`${secondaryButton} w-full`}>
+      <span aria-hidden="true">👥</span> Group chat
+    </button>
+  )
+}
+
 function CommentForm({ eventId, profile, replyingTo, onPosted, onCancel }) {
   const id = useId()
   const [text, setText] = useState('')
@@ -533,6 +559,7 @@ export default function EventDetail({ eventId, profile }) {
             onChange={() => setJoinChanges((n) => n + 1)}
           />
           <JoinerList eventId={event.event_id} eventTitle={event.event_title} profile={profile} refreshKey={joinChanges} />
+          <GroupChatButton eventId={event.event_id} profile={profile} isOrganizer={isOrganizer} refreshKey={joinChanges} />
           {!isOrganizer && (
             <div className="space-y-2">
               <button
