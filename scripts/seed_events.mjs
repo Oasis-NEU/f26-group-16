@@ -57,15 +57,14 @@ const EVENTS = [
     comments: [{ text: 'Will there be anyone who can help with hypothesis testing?', reply: 'Yes! One of the TAs covers intro stats.' }],
   },
   {
-    title: 'Sunset Doubles Tennis Social',
+    title: 'Open Gym Volleyball',
     category: 'sports',
-    picture: 'tennis',
     start: at(3, 17, 30),
     end: at(3, 19, 30),
-    location: 'Campus Tennis Courts',
+    location: 'Marino Recreation Center, upper gym',
     description:
-      'Rotating doubles until the lights come on. Beginners welcome; we’ll pair you up with someone who has played before.\n\nWe have a few spare rackets and plenty of balls.',
-    comments: [{ text: 'Do I need my own racket?', reply: 'Nope, we have spares. Just bring sneakers.' }],
+      'Rotating 6v6 games until the gym closes. Beginners welcome; we’ll pair you up with someone who has played before.\n\nWe have spare balls and a few sets of knee pads.',
+    comments: [{ text: 'Do I need my own ball?', reply: 'Nope, we have spares. Just bring sneakers.' }],
   },
   {
     title: 'Board Game Night',

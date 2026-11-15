@@ -1,4 +1,4 @@
-# AGENTS.md — Rally landing page
+# AGENTS.md — NUMeet
 
 Guidance for AI coding agents working on this repo. Follow these conventions so new work matches the existing page.
 
@@ -6,7 +6,7 @@ Guidance for AI coding agents working on this repo. Follow these conventions so 
 
 ## Overview
 
-Rally is a public event board for college campuses. Students and clubs post events, and others comment on them or message the organizer. Every post has:
+NUMeet is a public event board for the Northeastern campus. Students and clubs post events, and others comment on them or message the organizer. Every post has:
 
 - a cover **picture**
 - a **title**
@@ -275,7 +275,7 @@ src/
     EventPicture.jsx        # event picture, or the category glyph when there is none
     WeekCalendar.jsx        # week grid with hourly timeslots for the schedule page
     EventPopover.jsx        # hover/focus details popup for schedule calendar blocks
-    Logo.jsx                # SVG tennis racket logo with wind trails
+    Logo.jsx                # SVG Husky logo that barks on hover
     menu_bar.jsx            # Top menu bar
     messages_popup.jsx      # Messages button + popup: chat list, open chat, 2-second polling
     notifications_popup.jsx # Bell button + unread badge + notification list
@@ -315,29 +315,31 @@ Add new pages as a case in `currentPage()` in `App.jsx`.
 
 # Appearance and design
 
-## Theme: tennis court, green and white
+## Theme: Northeastern red, black and white
 
 Colors come from tokens in `src/index.css`. **Never hard-code `slate-*`, `gray-*`, `bg-white`, or hex values in components.** Use the tokens below so dark mode keeps working.
 
 | Token | Use for | Light | Dark |
 |---|---|---|---|
-| `page` | page background | `#ffffff` | `#0b1711` |
-| `surface` | cards, inputs, pills | `#ffffff` | `#12231a` |
-| `ink` | headings, primary text | `#0f172a` | `#e8f3ec` |
-| `muted` | body and secondary text | `#475569` | `#9db4a6` |
-| `line` | borders, dividers, placeholders | `#e2e8f0` | `#22382b` |
-| `brand-50` | tinted section backgrounds | `#f0f8f2` | `#10241a` |
-| `brand-100` | badges, soft fills | `#d9efdf` | `#173524` |
-| `brand-500` | primary buttons, accent text | `#2e8b57` | same |
-| `brand-600` | hover states, links, dates | `#24744a` | `#4cbb7c` |
-| `brand-700` | court section background, solid buttons | `#1c5d3b` | same |
-| `brand-900` | darkest accent | `#123d27` | `#0a2216` |
+| `page` | page background | `#ffffff` | `#121011` |
+| `surface` | cards, inputs, pills | `#ffffff` | `#1c191a` |
+| `ink` | headings, primary text | `#1a1a1a` | `#f5f0f0` |
+| `muted` | body and secondary text | `#525252` | `#b0a6a7` |
+| `line` | borders, dividers, placeholders | `#e5e5e5` | `#342d2e` |
+| `brand-50` | tinted section backgrounds | `#fdf2f3` | `#2a1215` |
+| `brand-100` | badges, soft fills | `#fbdde0` | `#3d171c` |
+| `brand-500` | primary buttons, accent text (Northeastern red) | `#d41b2c` | same |
+| `brand-600` | hover states, links, dates | `#b01624` | `#f0606d` |
+| `brand-700` | solid buttons, pressed states | `#8c111d` | same |
+| `brand-900` | darkest accent | `#5a0b13` | `#1f080b` |
+| `danger` / `danger-50` | errors, overlap warnings | `#b42318` / `#fef3f2` | `#fda29b` / `#2a1414` |
 
 Examples: `bg-page`, `bg-surface`, `text-ink`, `text-muted`, `border-line`, `bg-brand-500 hover:bg-brand-600`.
 
 - Dark mode is class-based (`.dark` on `<html>`), declared with `@custom-variant dark` in `index.css`. To add a new color, define it in `@theme` **and** override it in the `.dark` block.
 - Use `dark:` utilities only for one-off fixes, such as `dark:text-brand-600` on the hero badge.
-- `bg-white` and `text-white` are fine **only** on top of fixed green fills (buttons, the "How it works" court section, the CTA box, logo strokes).
+- `bg-white` and `text-white` are fine **only** on top of fixed red brand fills (buttons, joined calendar blocks, the logo tile).
+- `danger` is close to the brand red, so a red outline on a red fill needs a gap to show: the schedule's overlap outline is `ring-2 ring-danger ring-offset-1 ring-offset-surface`.
 
 ## Layout and components
 
@@ -352,8 +354,7 @@ Examples: `bg-page`, `bg-surface`, `text-ink`, `text-muted`, `border-line`, `bg-
 
 ## Signature details (keep these)
 
-- **Logo** (`Logo.jsx`): an upright white tennis racket centered on a `bg-brand-500` tile, with three wind trails on its left. When the parent `.group` is hovered, it winds up and **swings down** around the handle (`racket-swing` keyframes in `index.css`), and the trails streak in. Respect `prefers-reduced-motion`.
-- **Court lines** (`CourtLines` in `App.jsx`): faint white SVG court markings behind the "How it works" section.
+- **Logo** (`Logo.jsx`): a white Husky head in profile on a `bg-brand-500` tile, with a red mask over its ear and crown, and three bark arcs to the right of its snout (hidden at rest). When the parent `.group` is hovered, it rears back and **barks twice** (`husky-bark` keyframes in `index.css`): the jaw opens on each bark (`jaw-bark`) and the arcs pulse out (`bark-wave`). The same drawing is in `public/favicon.svg`. Respect `prefers-reduced-motion`.
 
 ## Accessibility
 

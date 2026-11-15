@@ -1,9 +1,9 @@
 ---
-name: rally-feature
-description: Build or change a Rally page, component, or Supabase data function the way Group 16 does it. Use when adding a page in src/pages, a component in src/components, a read/write function in src/api.jsx, or when wrapping up any change to the app.
+name: numeet-feature
+description: Build or change a NUMeet page, component, or Supabase data function the way Group 16 does it. Use when adding a page in src/pages, a component in src/components, a read/write function in src/api.jsx, or when wrapping up any change to the app.
 ---
 
-# Building a Rally feature
+# Building a NUMeet feature
 
 `AGENTS.md` has the product spec, the database schema, and the design tokens. This skill is the workflow for using them. Read the `AGENTS.md` section for the page you're building before writing code.
 

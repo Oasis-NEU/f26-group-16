@@ -96,7 +96,7 @@ function Block({ segment, firstHour, conflict, busy, past, describedBy, onRemove
 
   const look = suggested
     ? 'border-2 border-dashed border-brand-500 bg-brand-50 text-ink hover:bg-brand-100'
-    : `bg-brand-500 text-white shadow-sm hover:bg-brand-600 ${conflict ? 'ring-2 ring-danger' : ''}`
+    : `bg-brand-500 text-white shadow-sm hover:bg-brand-600 ${conflict ? 'ring-2 ring-danger ring-offset-1 ring-offset-surface' : ''}`
 
   return (
     <div

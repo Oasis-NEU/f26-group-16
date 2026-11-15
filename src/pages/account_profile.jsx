@@ -123,7 +123,7 @@ export default function AccountProfile({ uid, profile }) {
   if (!user || !user.is_active) {
     return (
       <Notice icon={user ? '👤' : '🔍'} title={user ? 'Deleted account' : 'Profile not found'}>
-        <p>{user ? 'This account has been deleted.' : 'This link doesn’t match anyone on Rally.'}</p>
+        <p>{user ? 'This account has been deleted.' : 'This link doesn’t match anyone on NUMeet.'}</p>
         <a href={HOME_PATH} className={primaryButton}>
           Back to events
         </a>
