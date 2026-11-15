@@ -1,4 +1,4 @@
-export const OPEN_CHAT_EVENT = 'rally:open-chat'
+export const OPEN_CHAT_EVENT = 'numeet:open-chat'
 
 // Opens the messages popup on a chat from anywhere in the app.
 export function openChat(chatId) {

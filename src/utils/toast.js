@@ -1,4 +1,4 @@
-export const TOAST_EVENT = 'rally:toast'
+export const TOAST_EVENT = 'numeet:toast'
 
 // Shows a short confirmation at the bottom of the screen, from anywhere in the
 // app. Use it when an action worked; failures stay next to the form as an

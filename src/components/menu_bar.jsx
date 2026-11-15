@@ -133,7 +133,7 @@ export default function MenuBar({ currentPage, profile }) {
       <div className="mx-auto flex h-16 max-w-6xl items-center justify-between gap-4 px-4 sm:px-6">
         <a href={HOME_PATH} className="group flex items-center gap-2 rounded-xl">
           <Logo />
-          <span className="text-xl font-extrabold tracking-tight text-ink">Rally</span>
+          <span className="text-xl font-extrabold tracking-tight text-ink">NUMeet</span>
         </a>
         <div className="flex items-center gap-2">
           <NotificationsPopup profile={profile} />

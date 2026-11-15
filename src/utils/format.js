@@ -1,7 +1,7 @@
 // Display helpers shared by pages and components. Times are UNIX seconds.
 
 const CATEGORY_EMOJI = {
-  sports: '🎾',
+  sports: '🏀',
   academic: '📚',
   arts: '🎭',
   clubs: '🧩',

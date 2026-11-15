@@ -123,7 +123,7 @@ function EventForm({ categories, event, profile }) {
           value={title}
           onChange={(e) => setTitle(e.target.value)}
           maxLength={TITLE_MAX}
-          placeholder="Sunset doubles at the courts"
+          placeholder="Study session at Snell Library"
           required
           className={inputClass}
         />

@@ -141,7 +141,7 @@ function SignUpForm({ onSwitch }) {
   return (
     <form onSubmit={submit} className="space-y-5">
       <div>
-        <h1 className="text-3xl font-extrabold tracking-tight text-ink">Join Rally</h1>
+        <h1 className="text-3xl font-extrabold tracking-tight text-ink">Join NUMeet</h1>
         <p className="mt-2 text-muted">Post events and find your people on campus.</p>
       </div>
       <Field
@@ -200,7 +200,7 @@ export default function LoginPage({ notice }) {
       <div className="w-full max-w-md">
         <div className="group mb-6 flex items-center justify-center gap-2">
           <Logo className="h-10 w-10" />
-          <span className="text-2xl font-extrabold tracking-tight text-ink">Rally</span>
+          <span className="text-2xl font-extrabold tracking-tight text-ink">NUMeet</span>
         </div>
         <div className="space-y-5 rounded-2xl border border-line bg-surface p-6 shadow-sm sm:p-8">
           <ErrorMessage message={notice} />

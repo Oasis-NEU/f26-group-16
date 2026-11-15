@@ -2,37 +2,37 @@
 
 @custom-variant dark (&:where(.dark, .dark *));
 
-/* Theme tokens: tennis court, green and white. See AGENTS.md. */
+/* Theme tokens: Northeastern red, black and white. See AGENTS.md. */
 @theme {
   --color-page: #ffffff;
   --color-surface: #ffffff;
-  --color-ink: #0f172a;
-  --color-muted: #475569;
-  --color-line: #e2e8f0;
+  --color-ink: #1a1a1a;
+  --color-muted: #525252;
+  --color-line: #e5e5e5;
   --color-danger: #b42318;
   --color-danger-50: #fef3f2;
 
-  --color-brand-50: #f0f8f2;
-  --color-brand-100: #d9efdf;
-  --color-brand-500: #2e8b57;
-  --color-brand-600: #24744a;
-  --color-brand-700: #1c5d3b;
-  --color-brand-900: #123d27;
+  --color-brand-50: #fdf2f3;
+  --color-brand-100: #fbdde0;
+  --color-brand-500: #d41b2c;
+  --color-brand-600: #b01624;
+  --color-brand-700: #8c111d;
+  --color-brand-900: #5a0b13;
 }
 
 .dark {
-  --color-page: #0b1711;
-  --color-surface: #12231a;
-  --color-ink: #e8f3ec;
-  --color-muted: #9db4a6;
-  --color-line: #22382b;
+  --color-page: #121011;
+  --color-surface: #1c191a;
+  --color-ink: #f5f0f0;
+  --color-muted: #b0a6a7;
+  --color-line: #342d2e;
   --color-danger: #fda29b;
   --color-danger-50: #2a1414;
 
-  --color-brand-50: #10241a;
-  --color-brand-100: #173524;
-  --color-brand-600: #4cbb7c;
-  --color-brand-900: #0a2216;
+  --color-brand-50: #2a1215;
+  --color-brand-100: #3d171c;
+  --color-brand-600: #f0606d;
+  --color-brand-900: #1f080b;
 }
 
 html {
@@ -48,62 +48,96 @@ body {
   margin: 0;
 }
 
-/* Logo: hovering the parent .group winds the racket up, swings it down around
-   the handle, and streaks the wind trails in. */
-.logo-racket {
+/* Logo: hovering the parent .group makes the husky rear back and bark twice.
+   The jaw opens on each bark and the arcs pulse out from the snout. */
+.logo-husky {
   transform-box: view-box;
-  transform-origin: 24px 34px;
+  transform-origin: 11px 38px;
 }
 
-.logo-trail {
-  opacity: 0.6;
+.logo-jaw {
+  transform-box: view-box;
+  transform-origin: 20.3px 23.9px;
 }
 
-.group:hover .logo-racket {
-  animation: racket-swing 0.7s ease-in-out;
+.logo-bark {
+  opacity: 0;
 }
 
-.group:hover .logo-trail {
-  animation: trail-streak 0.5s ease-out both;
+.group:hover .logo-husky {
+  animation: husky-bark 0.9s ease-in-out;
 }
 
-.group:hover .logo-trail:nth-child(2) {
-  animation-delay: 0.08s;
+.group:hover .logo-jaw {
+  animation: jaw-bark 0.9s ease-in-out;
 }
 
-.group:hover .logo-trail:nth-child(3) {
-  animation-delay: 0.16s;
+.group:hover .logo-bark {
+  animation: bark-wave 0.32s ease-out 0.2s 2 both;
 }
 
-@keyframes racket-swing {
+.group:hover .logo-bark:nth-child(2) {
+  animation-delay: 0.24s;
+}
+
+.group:hover .logo-bark:nth-child(3) {
+  animation-delay: 0.28s;
+}
+
+@keyframes husky-bark {
   0% {
     transform: rotate(0deg);
   }
+  15% {
+    transform: rotate(-10deg);
+  }
   30% {
-    transform: rotate(-25deg);
+    transform: rotate(5deg);
+  }
+  48% {
+    transform: rotate(-7deg);
   }
   65% {
-    transform: rotate(70deg);
+    transform: rotate(5deg);
   }
   100% {
     transform: rotate(0deg);
   }
 }
 
-@keyframes trail-streak {
-  from {
-    opacity: 0;
-    transform: translateX(6px);
+@keyframes jaw-bark {
+  0%,
+  18%,
+  42%,
+  53%,
+  78%,
+  100% {
+    transform: rotate(0deg);
   }
-  to {
-    opacity: 0.6;
-    transform: translateX(0);
+  30%,
+  65% {
+    transform: rotate(22deg);
+  }
+}
+
+@keyframes bark-wave {
+  0% {
+    opacity: 0;
+    transform: translateX(-3px);
+  }
+  40% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: translateX(2px);
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .group:hover .logo-racket,
-  .group:hover .logo-trail {
+  .group:hover .logo-husky,
+  .group:hover .logo-jaw,
+  .group:hover .logo-bark {
     animation: none;
   }
 }
