@@ -35,6 +35,7 @@ The platform is open to any campus event: study sessions, club meetings, open mi
 
 - Displayed when the user is logged in
 - The home page lists the available events in a grid view, detailing the picture, title, date, and organizer (account) of the event
+    - Events with a headcount limit also show "4/10 · 6 spots left" (or "10/10 · Full" in `danger` red) on the card. Events without a limit show no count
 - The user can choose different categories (e.g. sport, entertainment) to filter events
     - Additional filters like date range
 - "Post an event" button that opens the edit event page in create mode (same form, empty)
@@ -44,10 +45,13 @@ The platform is open to any campus event: study sessions, club meetings, open mi
 - Each post includes a picture, title, description & location, category, and the start/end date of the event with the organizer (account) of it
     - If picture not present, use a placeholder glyph instead
 - "Join event" button with a display of how many people already joined/subscribed
+    - With a headcount limit it reads "4/10 joined · 6 spots left". Once full, the button is disabled and says "Full" for people who haven't joined; people already in can still leave
+    - The database rejects joins past the limit (`trg_check_event_capacity`), so a stale page can't overfill an event. If that happens, the page shows "Sorry, this event just filled up." and switches to Full
 - Comments with replies
 - "Direct message" button to contact the organizer
 - "Who's going" list of people who joined, each with a message button to chat with them directly (not shown for yourself or deleted accounts)
 - If viewing as the event creator, a button that opens an "edit event" page allowing for modifications of these fields
+    - The form has an optional "How many people?" field (headcount limit, at least 2; empty = no limit). When editing, a limit below the people already joined shows a red warning and the form can't be saved
 
 ### Personal schedule page
 
@@ -69,7 +73,7 @@ The platform is open to any campus event: study sessions, club meetings, open mi
 - If the week has no joined events, a status line says so, with a "Jump to your next event" button (or a link to browse events if the user hasn't joined anything)
 - "Suggest events" switch: off by default, held only in page state (not saved in the database or browser storage), so it's off again on every visit
     - While on, events that fit the user's open time show as dashed blocks in that week, with a "+" button that joins the event
-    - Open time is any time not taken by a joined event (there is no availability table). A suggestion must not overlap a joined event, not be organized by the user, not be joined already, and not have started
+    - Open time is any time not taken by a joined event (there is no availability table). A suggestion must not overlap a joined event, not be organized by the user, not be joined already, not be full, and not have started
     - At most 8 suggestions per week. Categories the user joins most come first, then the soonest
     - Suggestions are fetched per week only while the switch is on, and reused when toggling or returning to a week. Past weeks get none
 - Joining and removing update the calendar right away and roll back with an error message if the request fails
@@ -136,8 +140,10 @@ The platform is open to any campus event: study sessions, club meetings, open mi
 - Table of event categories
     - Category ID, name
 - Table for events created
-    - Title, picture (encode as WebP at 1920x1080 max), start & end date, organizer UID, unique event ID, category
-    - Backend validation: Title ≤ 100 chars; prevent user from choosing end date earlier than start date, etc.
+    - Title, picture (encode as WebP at 1920x1080 max), start & end date, organizer UID, unique event ID, category, headcount limit (`max_participants`, NULL = no limit)
+    - Backend validation: Title ≤ 100 chars; prevent user from choosing end date earlier than start date; headcount limit ≥ 2, etc.
+    - Headcount triggers: `trg_check_event_capacity` rejects a join once the event is full (error `event_full`), and `trg_check_capacity_not_below_joined` rejects lowering the limit below the people already joined (error `capacity_below_joined`)
+    - Event rows from `api.jsx` carry `joined: [{ count }]`. Read it with `joinedCount(event)`, and use `isFull(event)` / `spotsLabel(count, max)` from `src/utils/capacity.js`
 - Table for comments
     - Each entry contains the event ID which the comment belongs to
     - Comment content, sender UID, comment ID, replying comment ID, date
@@ -286,6 +292,7 @@ src/
     supabase.js             # Supabase client (only api.jsx imports it)
     routes.js               # hash routes: path builders, useRoute(), navigate()
     format.js               # dates, "Deleted account" names, category glyphs
+    capacity.js             # headcount: joinedCount(), isFull(), spotsLabel()
     chat_events.js          # openChat(chatId): opens the messages popup from any page
     use_dismiss.js          # useDismiss(): closes a popup on Escape or an outside click
     use_polling.js          # usePolling(): re-fetches data on a timer, keeps it through failures
