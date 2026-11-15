@@ -165,7 +165,7 @@ Dashboard setting (Authentication → Sign In / Providers → **Email**):
 - Email provider: **on**
 - Confirm email: **off for now**. Supabase's built-in email service only delivers to members of the Supabase project and sends just a few emails per hour. Turn it back on once a custom SMTP sender is set up (Authentication → Emails → SMTP Settings). The app handles both: with it on, sign-up shows "Check your inbox".
 
-Sign-up trigger: creates the `users` row when someone signs up. `full_name` comes from the sign-up form's metadata. The `handle_new_user` trigger can be found in the `docs/main_schema.sql` file.
+Sign-up trigger: creates the `users` row when someone signs up. `full_name` comes from the sign-up form's metadata, or defaults to `user_` + the first 8 characters of the uid if it's missing or blank. The `handle_new_user` trigger can be found in the `docs/main_schema.sql` file.
 
 (Migration steps from the first auth version and troubleshooting are in `docs/auth-setup.md`.)
 
