@@ -59,25 +59,25 @@ The platform is open to any campus event: study sessions, club meetings, open mi
 
 ### Personal schedule page
 
-- Shows the events the user has joined on a week calendar (Sunday–Saturday) with hourly timeslots
+- Shows the events the user has joined, and the events they organize, on a week calendar (Sunday–Saturday) with hourly timeslots
     - "‹" / "This week" / "›" buttons move between weeks; the week label (e.g. "Nov 8 – 14") sits next to them
     - Each event is a block placed at its start/end time. Events without an end time are drawn as 1 hour long. Overlapping events sit side by side
-    - Joined events that overlap each other get a red outline and a ⚠️
+    - Joined and organized events that overlap each other get a red outline and a ⚠️
     - Past events are faded, and a red line marks the current time on today's column
     - The time range is 8 AM–10 PM by default and grows to fit earlier or later events
     - Hour rows shrink with the window (between 1.25rem and 3rem) so the whole week fits on one screen without scrolling
     - Below `sm`, one day column shows at a time, picked from a strip of day buttons. A solid dot under a day means it has joined events; a hollow dot means it has suggestions only
-- Each block shows the title and time (tall blocks also show the event picture), and jumps to the detail page when clicked
+- Each block shows the title and time (tall blocks also show the event picture)
     - Short or side-by-side blocks show the title and start time on one line
-    - Hovering a block with the mouse for 0.3s (or focusing it with the keyboard) opens a small details popup next to it: picture (or category glyph), date and time, title, organizer, location, description (up to 4 lines), and any overlap warning
-        - The popup is hoverable: the mouse can move from the block onto it (there's a 150ms grace period for the gap), and it stays open while hovered. It closes once the pointer has left both the block and the popup, or on Escape or scroll/resize. On touch screens a tap goes straight to the detail page
-        - A full-width button at the bottom joins or leaves the event: "＋ Join event" (primary) on suggestions, "Leave event" (secondary) on joined events. It uses the large button style, slightly smaller below `sm`. After joining, the popup stays open and switches to "Leave event"
+    - Clicking (or tapping, or pressing Enter on) a block opens a small details popup next to it: picture (or category glyph), date and time, title, organizer ("· You’re hosting" on your own events), location, description (up to 4 lines), and any overlap warning. Hovering does nothing
+        - Clicking the same block again closes it, and clicking another block moves it there. It also closes on a click outside, Escape (focus goes back to the block), Tabbing out, or scroll/resize. Opening it moves focus into it
+        - Full-width buttons at the bottom, in the large button style (slightly smaller below `sm`): "View details" links to the detail page; below it, "＋ Join event" on suggestions or "Leave event" on joined events. The main action is primary: "＋ Join event" on suggestions (with "View details" secondary), otherwise "View details" (with "Leave event" secondary). Organized events show only "View details". After joining, the popup stays open and switches to "Leave event"
         - It resizes with the screen: 18rem wide (never wider than the screen) on phones, `w-80` from `sm`, `w-96` from `lg`, with the picture, padding, and title growing to match. It always stays inside the viewport
-- The user can remove an event from the join list with the × button on its block
-- If the week has no joined events, a status line says so, with a "Jump to your next event" button (or a link to browse events if the user hasn't joined anything)
+- The user can remove an event from the join list with the × button on its block. Organized events have no × button (organizers can't leave their own event)
+- If the week has no joined or organized events, a status line says so, with a "Jump to your next event" button (or a link to browse events if the user hasn't joined or posted anything)
 - "Suggest events" switch: off by default, held only in page state (not saved in the database or browser storage), so it's off again on every visit
     - While on, events that fit the user's open time show as dashed blocks in that week, with a "+" button that joins the event
-    - Open time is any time not taken by a joined event (there is no availability table). A suggestion must not overlap a joined event, not be organized by the user, not be joined already, not be full, and not have started
+    - Open time is any time not taken by a joined or organized event (there is no availability table). A suggestion must not overlap one of those, not be organized by the user, not be joined already, not be full, and not have started
     - At most 8 suggestions per week. Categories the user joins most come first, then the soonest
     - Suggestions are fetched per week only while the switch is on, and reused when toggling or returning to a week. Past weeks get none
 - Joining and removing update the calendar right away and roll back with an error message if the request fails
@@ -294,7 +294,7 @@ src/
     UserName.jsx            # name linking to the user's profile ("Deleted account" for deleted users)
     EventPicture.jsx        # event picture, or the category glyph when there is none
     WeekCalendar.jsx        # week grid with hourly timeslots for the schedule page
-    EventPopover.jsx        # hover/focus details popup for schedule calendar blocks
+    EventPopover.jsx        # click-to-open details popup for schedule calendar blocks
     ConfirmDialog.jsx       # modal "are you sure?" popup for deleting things
     Logo.jsx                # SVG Husky logo that barks on hover
     menu_bar.jsx            # Top menu bar

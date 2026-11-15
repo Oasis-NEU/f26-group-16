@@ -1,20 +1,16 @@
-import { useCallback, useEffect, useId, useRef, useState } from 'react'
+import { useCallback, useId, useState } from 'react'
 import { daySegments, hourRange, layoutDay, toSeconds, weekDays } from '../utils/calendar.js'
-import { eventPath } from '../utils/routes.js'
 import { eventEnd, formatTimeRange } from '../utils/schedule.js'
 import EventPicture from './EventPicture.jsx'
 import EventPopover from './EventPopover.jsx'
 
 // Week grid with hourly timeslots for the schedule page. `items` are
-// { event, kind } where kind is 'joined' (solid block) or 'suggested'
-// (dashed block with an add button). Below `sm` only the selected day's
-// column shows, picked from a strip of day buttons. Hovering a block for
-// PREVIEW_DELAY (or focusing it) opens an EventPopover with its details and
-// a Join/Leave button. Leaving the block waits CLOSE_GRACE before closing, so
-// the mouse can cross the gap onto the popover, which keeps it open.
-
-const PREVIEW_DELAY = 300
-const CLOSE_GRACE = 150
+// { event, kind } where kind is 'joined' (solid block with a remove button),
+// 'hosted' (solid block, the user's own event, no remove button), or
+// 'suggested' (dashed block with an add button). Below `sm` only the selected
+// day's column shows, picked from a strip of day buttons. Clicking a block
+// opens an EventPopover with its details, a "View details" link, and a
+// Join/Leave button; clicking it again (or outside) closes it.
 
 // Hour rows shrink so the whole grid fits on screen: the viewport height
 // minus everything above the grid (--chrome: menu bar, page header, toolbar,
@@ -31,7 +27,7 @@ const gridCols = 'grid grid-cols-[3rem_minmax(0,1fr)] sm:grid-cols-[3.5rem_repea
 
 const isSameDay = (a, b) => a.toDateString() === b.toDateString()
 const dayMarker = (segments) =>
-  segments.some((s) => s.kind === 'joined') ? 'joined' : segments.length > 0 ? 'suggested' : null
+  segments.some((s) => s.kind !== 'suggested') ? 'joined' : segments.length > 0 ? 'suggested' : null
 
 // `marker` is 'joined', 'suggested' (only suggestions that day), or null.
 function DayButton({ day, today, selected, marker, onSelect }) {
@@ -76,9 +72,11 @@ function DayHeader({ day, today }) {
 
 const segmentKey = (segment) => `${segment.kind}-${segment.event.event_id}`
 
-function Block({ segment, firstHour, conflict, busy, past, describedBy, onRemove, onAdd, onPreviewStart, onPreviewLeave, onPreviewClose }) {
+function Block({ segment, firstHour, conflict, busy, past, open, popoverId, onRemove, onAdd, onOpen }) {
   const { event, kind } = segment
   const suggested = kind === 'suggested'
+  // Your own events can't be left (organizers aren't joiners), so no × button.
+  const hasAction = kind !== 'hosted'
   const duration = segment.bottom - segment.top
   const style = {
     top: hours(segment.top - firstHour, 1),
@@ -102,19 +100,18 @@ function Block({ segment, firstHour, conflict, busy, past, describedBy, onRemove
     <div
       style={style}
       className={`absolute overflow-hidden rounded-lg ${look} ${past ? 'opacity-60' : ''}`}
-      // Mouse only: on touch screens a tap goes straight to the event.
-      onPointerEnter={(e) => e.pointerType === 'mouse' && onPreviewStart(segment, e.currentTarget)}
-      onPointerLeave={onPreviewLeave}
-      onPointerDown={onPreviewClose}
+      // Clicks on any block are handled here, not as "outside" the popover.
+      data-schedule-block=""
     >
-      <a
-        href={eventPath(event.event_id)}
-        aria-describedby={describedBy}
-        onFocus={(e) => onPreviewStart(segment, e.currentTarget.parentElement)}
-        onBlur={onPreviewLeave}
-        className={`flex h-full gap-1 rounded-lg pr-5 text-[10px] leading-[1.2] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand-900 ${
-          compact ? 'py-px pl-1' : 'p-1'
-        }`}
+      <button
+        type="button"
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        aria-controls={open ? popoverId : undefined}
+        onClick={(e) => onOpen(segment, e.currentTarget)}
+        className={`flex h-full w-full gap-1 rounded-lg text-left text-[10px] leading-[1.2] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand-900 ${
+          hasAction ? 'pr-5' : 'pr-1'
+        } ${compact ? 'py-px pl-1' : 'p-1'}`}
       >
         {showPicture && (
           <div className="h-6 w-6 shrink-0 overflow-hidden rounded">
@@ -135,18 +132,20 @@ function Block({ segment, firstHour, conflict, busy, past, describedBy, onRemove
             <p className={`truncate ${subtle}`}>{time}</p>
           </div>
         )}
-      </a>
-      <button
-        type="button"
-        onClick={() => (suggested ? onAdd : onRemove)(event)}
-        disabled={busy}
-        aria-label={suggested ? `Add ${event.event_title} to your schedule` : `Remove ${event.event_title} from your schedule`}
-        className={`absolute right-0.5 top-0.5 flex h-4 w-4 items-center justify-center rounded text-xs font-bold leading-none disabled:opacity-50 ${
-          suggested ? 'bg-brand-500 text-white hover:bg-brand-600' : 'text-white hover:bg-brand-700'
-        }`}
-      >
-        <span aria-hidden="true">{suggested ? '+' : '×'}</span>
       </button>
+      {hasAction && (
+        <button
+          type="button"
+          onClick={() => (suggested ? onAdd : onRemove)(event)}
+          disabled={busy}
+          aria-label={suggested ? `Add ${event.event_title} to your schedule` : `Remove ${event.event_title} from your schedule`}
+          className={`absolute right-0.5 top-0.5 flex h-4 w-4 items-center justify-center rounded text-xs font-bold leading-none disabled:opacity-50 ${
+            suggested ? 'bg-brand-500 text-white hover:bg-brand-600' : 'text-white hover:bg-brand-700'
+          }`}
+        >
+          <span aria-hidden="true">{suggested ? '+' : '×'}</span>
+        </button>
+      )}
     </div>
   )
 }
@@ -159,41 +158,28 @@ export default function WeekCalendar({ weekStart, selectedIndex, onSelectDay, it
   const hourList = Array.from({ length: lastHour - firstHour }, (_, i) => firstHour + i)
   const height = hours(hourList.length)
 
-  // Preview popover: { eventId, anchor } once a block has been hovered or
-  // focused for PREVIEW_DELAY. `anchor` is the block's screen rectangle.
+  // Popover: { eventId, day, anchor, trigger } for the clicked block. `anchor`
+  // is the block's screen rectangle, `trigger` its button (focus goes back
+  // there on Escape). `day` tells apart blocks of an event spanning days.
   const popoverId = useId()
   const [preview, setPreview] = useState(null)
-  const openTimer = useRef(null)
-  const closeTimer = useRef(null)
 
-  const startPreview = (segment, element) => {
-    clearTimeout(closeTimer.current)
+  // Clicking the open block closes it; clicking another block moves it there.
+  const togglePreview = (dayIndex, segment, trigger) => {
     const eventId = segment.event.event_id
-    if (preview?.eventId === eventId) return
-    clearTimeout(openTimer.current)
-    openTimer.current = setTimeout(
-      () => setPreview({ eventId, anchor: element.getBoundingClientRect() }),
-      PREVIEW_DELAY,
+    setPreview((current) =>
+      current?.eventId === eventId && current.day === dayIndex
+        ? null
+        : { eventId, day: dayIndex, anchor: trigger.parentElement.getBoundingClientRect(), trigger },
     )
   }
-  // Pointer left the block or the popover (or focus left the block).
-  const leavePreview = () => {
-    clearTimeout(openTimer.current)
-    clearTimeout(closeTimer.current)
-    closeTimer.current = setTimeout(() => setPreview(null), CLOSE_GRACE)
-  }
-  const keepPreview = () => clearTimeout(closeTimer.current)
-  const closePreview = useCallback(() => {
-    clearTimeout(openTimer.current)
-    clearTimeout(closeTimer.current)
-    setPreview(null)
-  }, [])
-  useEffect(
-    () => () => {
-      clearTimeout(openTimer.current)
-      clearTimeout(closeTimer.current)
+  const trigger = preview?.trigger
+  const closePreview = useCallback(
+    ({ restoreFocus = false } = {}) => {
+      if (restoreFocus && trigger?.isConnected) trigger.focus()
+      setPreview(null)
     },
-    [],
+    [trigger],
   )
 
   // Look the event up again by id, so the popover follows it from suggested
@@ -201,7 +187,7 @@ export default function WeekCalendar({ weekStart, selectedIndex, onSelectDay, it
   const allSegments = segmentsByDay.flat()
   const previewed =
     preview &&
-    (allSegments.find((s) => s.event.event_id === preview.eventId && s.kind === 'joined') ??
+    (allSegments.find((s) => s.event.event_id === preview.eventId && s.kind !== 'suggested') ??
       allSegments.find((s) => s.event.event_id === preview.eventId))
 
   return (
@@ -275,15 +261,14 @@ export default function WeekCalendar({ weekStart, selectedIndex, onSelectDay, it
                   key={segmentKey(segment)}
                   segment={segment}
                   firstHour={firstHour}
-                  conflict={segment.kind === 'joined' ? conflicts[segment.event.event_id] : null}
+                  conflict={segment.kind !== 'suggested' ? conflicts[segment.event.event_id] : null}
                   busy={Boolean(pending[segment.event.event_id])}
                   past={eventEnd(segment.event) < now}
-                  describedBy={previewed && preview.eventId === segment.event.event_id ? popoverId : undefined}
+                  open={Boolean(previewed) && preview.eventId === segment.event.event_id && preview.day === i}
+                  popoverId={popoverId}
                   onRemove={onRemove}
                   onAdd={onAdd}
-                  onPreviewStart={startPreview}
-                  onPreviewLeave={leavePreview}
-                  onPreviewClose={closePreview}
+                  onOpen={(seg, trigger) => togglePreview(i, seg, trigger)}
                 />
               ))}
             </div>
@@ -296,13 +281,11 @@ export default function WeekCalendar({ weekStart, selectedIndex, onSelectDay, it
           id={popoverId}
           event={previewed.event}
           anchor={preview.anchor}
-          joined={previewed.kind === 'joined'}
+          kind={previewed.kind}
           busy={Boolean(pending[previewed.event.event_id])}
-          conflict={previewed.kind === 'joined' ? conflicts[previewed.event.event_id] : null}
+          conflict={previewed.kind !== 'suggested' ? conflicts[previewed.event.event_id] : null}
           onToggleJoin={previewed.kind === 'joined' ? onRemove : onAdd}
           onClose={closePreview}
-          onPointerEnter={keepPreview}
-          onPointerLeave={leavePreview}
         />
       )}
     </div>

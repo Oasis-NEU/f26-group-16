@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { joinEvent, leaveEvent, listEvents, listJoinedEvents } from '../api.jsx'
+import { joinEvent, leaveEvent, listEvents, listEventsByOrganizer, listJoinedEvents } from '../api.jsx'
 import { ErrorMessage, secondaryButton, smallButton } from '../components/ui.jsx'
 import WeekCalendar from '../components/WeekCalendar.jsx'
 import { addDays, formatWeekLabel, startOfWeek, toSeconds } from '../utils/calendar.js'
@@ -14,6 +14,7 @@ const nowSeconds = () => Math.floor(Date.now() / 1000)
 // Keeps the joined list sorted by start time when an event is added back.
 const insertSorted = (events, event) => [...events, event].sort((a, b) => a.start_time - b.start_time)
 const without = (events, eventId) => events.filter((event) => event.event_id !== eventId)
+const inWeek = (events, from, to) => events.filter((event) => event.start_time < to && eventEnd(event) > from)
 
 function SuggestionsSwitch({ on, onToggle }) {
   return (
@@ -57,7 +58,8 @@ export default function Schedule({ profile }) {
   const [selectedIndex, setSelectedIndex] = useState(() => new Date().getDay())
 
   const [joinedRetries, setJoinedRetries] = useState(0)
-  // { key, events } or { key, error }; key = the retry it was loaded for.
+  // { key, events, hosted } or { key, error }; key = the retry it was loaded
+  // for. `events` are the joined ones, `hosted` the ones the user organizes.
   const [joined, setJoined] = useState(null)
 
   // Suggestions start off and aren't saved anywhere. Results are cached per
@@ -79,8 +81,15 @@ export default function Schedule({ profile }) {
   useEffect(() => {
     let cancelled = false
     const key = joinedRetries
-    listJoinedEvents(profile.uid)
-      .then((events) => !cancelled && setJoined({ key, events }))
+    Promise.all([listJoinedEvents(profile.uid), listEventsByOrganizer(profile.uid)])
+      .then(([joinedRows, hostedRows]) => {
+        if (cancelled) return
+        const hosted = [...hostedRows].sort((a, b) => a.start_time - b.start_time)
+        // Organizers can't join their own events, but drop any old rows so a
+        // hosted event never shows twice (or with a Leave button).
+        const hostedIds = new Set(hosted.map((event) => event.event_id))
+        setJoined({ key, events: joinedRows.filter((event) => !hostedIds.has(event.event_id)), hosted })
+      })
       .catch((err) => !cancelled && setJoined({ key, error: err.message }))
     return () => {
       cancelled = true
@@ -107,34 +116,39 @@ export default function Schedule({ profile }) {
 
   const joinedLoading = joined?.key !== joinedRetries
   const joinedEvents = joined?.events
+  const hostedEvents = joined?.hosted
 
-  const weekJoined = useMemo(
-    () => (joinedEvents ?? []).filter((event) => event.start_time < weekTo && eventEnd(event) > weekFrom),
-    [joinedEvents, weekFrom, weekTo],
-  )
-  const conflicts = useMemo(() => findConflicts(weekJoined), [weekJoined])
+  const weekJoined = useMemo(() => inWeek(joinedEvents ?? [], weekFrom, weekTo), [joinedEvents, weekFrom, weekTo])
+  const weekHosted = useMemo(() => inWeek(hostedEvents ?? [], weekFrom, weekTo), [hostedEvents, weekFrom, weekTo])
+  // Everything the user will be at: joined events plus the ones they host.
+  const busyEvents = useMemo(() => [...(joinedEvents ?? []), ...(hostedEvents ?? [])], [joinedEvents, hostedEvents])
+  const conflicts = useMemo(() => findConflicts([...weekJoined, ...weekHosted]), [weekJoined, weekHosted])
   const suggestions = useMemo(() => {
     if (!showSuggestions || !joinedEvents || !weekSuggestions?.events) return []
     return suggestEvents({
       candidates: weekSuggestions.events.filter((event) => !pending[event.event_id]),
       joined: joinedEvents,
+      busy: busyEvents,
       uid: profile.uid,
       now,
       limit: SUGGESTIONS_PER_WEEK,
     })
-  }, [showSuggestions, joinedEvents, weekSuggestions, pending, profile.uid, now])
+  }, [showSuggestions, joinedEvents, busyEvents, weekSuggestions, pending, profile.uid, now])
 
   const items = useMemo(
     () => [
       ...weekJoined.map((event) => ({ event, kind: 'joined' })),
+      ...weekHosted.map((event) => ({ event, kind: 'hosted' })),
       ...suggestions.map((event) => ({ event, kind: 'suggested' })),
     ],
-    [weekJoined, suggestions],
+    [weekJoined, weekHosted, suggestions],
   )
 
   const thisWeekStart = startOfWeek(new Date(now * 1000))
   const onThisWeek = weekStart.getTime() === thisWeekStart.getTime()
-  const nextJoined = joinedEvents?.find((event) => event.start_time >= weekTo)
+  const nextEvent = busyEvents
+    .filter((event) => event.start_time >= weekTo)
+    .reduce((soonest, event) => (!soonest || event.start_time < soonest.start_time ? event : soonest), null)
 
   const goToWeek = (date) => {
     setWeekStart(startOfWeek(date))
@@ -176,7 +190,7 @@ export default function Schedule({ profile }) {
 
   let status = null
   if (joinedEvents) {
-    if (joinedEvents.length === 0 && !showSuggestions) {
+    if (busyEvents.length === 0 && !showSuggestions) {
       status = (
         <StatusLine>
           You haven’t joined anything yet.{' '}
@@ -207,16 +221,16 @@ export default function Schedule({ profile }) {
             : `${suggestions.length} ${suggestions.length === 1 ? 'event fits' : 'events fit'} your open time this week. They’re the dashed ones. Tap + to add.`}
         </StatusLine>
       )
-    } else if (weekJoined.length === 0) {
+    } else if (weekJoined.length === 0 && weekHosted.length === 0) {
       status = (
         <StatusLine>
           Nothing on your calendar this week.
-          {nextJoined && (
+          {nextEvent && (
             <>
               {' '}
               <button
                 type="button"
-                onClick={() => goToWeek(new Date(nextJoined.start_time * 1000))}
+                onClick={() => goToWeek(new Date(nextEvent.start_time * 1000))}
                 className="font-semibold text-brand-600 hover:underline"
               >
                 Jump to your next event
@@ -261,7 +275,7 @@ export default function Schedule({ profile }) {
       <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
         <div>
           <h1 className="text-3xl font-extrabold tracking-tight text-ink sm:text-4xl">Your schedule</h1>
-          <p className="mt-2 text-muted">Everything you’ve joined, plus stuff that fits your free time.</p>
+          <p className="mt-2 text-muted">Everything you’ve joined or are hosting, plus stuff that fits your free time.</p>
         </div>
         <SuggestionsSwitch on={showSuggestions} onToggle={() => setShowSuggestions((on) => !on)} />
       </div>

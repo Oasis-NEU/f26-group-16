@@ -58,9 +58,10 @@ export function findConflicts(events) {
 }
 
 // Events that fit the user's open time: not joined, not their own, not started
-// yet, not full, and not overlapping anything they joined. Categories the user
-// joins most come first, then the soonest.
-export function suggestEvents({ candidates, joined, uid, now, limit = 6 }) {
+// yet, not full, and not overlapping anything in `busy` (what they joined, plus
+// the events they're hosting). Categories the user joins most come first, then
+// the soonest.
+export function suggestEvents({ candidates, joined, busy = joined, uid, now, limit = 6 }) {
   const joinedIds = new Set(joined.map((event) => event.event_id))
   const categoryCounts = {}
   for (const event of joined) {
@@ -75,7 +76,7 @@ export function suggestEvents({ candidates, joined, uid, now, limit = 6 }) {
         event.organizer_uid !== uid &&
         event.start_time > now &&
         !isFull(event) &&
-        !joined.some((mine) => overlaps(mine, event)),
+        !busy.some((mine) => overlaps(mine, event)),
     )
     .sort((a, b) => score(b) - score(a) || a.start_time - b.start_time)
     .slice(0, limit)
