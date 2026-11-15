@@ -7,7 +7,6 @@ DROP TABLE IF EXISTS event_comments CASCADE;
 DROP TABLE IF EXISTS joined_events CASCADE;
 DROP TABLE IF EXISTS chat_msgs CASCADE;
 DROP TABLE IF EXISTS chats_list CASCADE;
-DROP TABLE IF EXISTS event_chat_msgs CASCADE;
 DROP TABLE IF EXISTS notifications CASCADE;
 -- DELETE FROM auth.users;  -- wipes all logins; the signup trigger recreates users rows
 
@@ -205,12 +204,20 @@ CREATE OR REPLACE TRIGGER trg_check_capacity_not_below_joined BEFORE UPDATE OF m
 
 -- #region Chats list
 -- (create rows for each user)
+-- Two kinds of chat share this table and chat_msgs:
+--   direct chat: two people, event_id NULL, chat_id a random UUID
+--   event group chat: event_id set, chat_id 'event:' || event_id. Rows are
+--   managed only by the group chat triggers below (RLS stops users from
+--   adding, changing, or removing them).
 CREATE TABLE chats_list(
     chat_id TEXT NOT NULL,
     -- Defaults to event name; each user can set its own name for reference
+    -- (group chats always use the event title)
     chat_name TEXT NOT NULL CHECK (char_length(btrim(chat_name)) BETWEEN 1 AND 100),
     user_id TEXT NOT NULL REFERENCES users(uid) ON UPDATE CASCADE,
-    CONSTRAINT uc_chat_user UNIQUE (chat_id, user_id)
+    event_id TEXT REFERENCES events(event_id) ON DELETE CASCADE,
+    CONSTRAINT uc_chat_user UNIQUE (chat_id, user_id),
+    CONSTRAINT chk_group_chat_id CHECK (event_id IS NULL OR chat_id = 'event:' || event_id)
 );
 
 -- #region Chat messages
@@ -223,37 +230,68 @@ CREATE TABLE chat_msgs(
 );
 
 -- #region Event group chats
--- One group chat per event. Members are the organizer plus everyone in
--- joined_events, so joining or leaving the event changes membership with no
--- extra table. Direct chats (chats_list / chat_msgs) are separate.
-CREATE TABLE event_chat_msgs(
-    msg_id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
-    event_id TEXT NOT NULL REFERENCES events(event_id) ON DELETE CASCADE,
-    sender_uid TEXT NOT NULL REFERENCES users(uid) ON UPDATE CASCADE,
-    msg_content TEXT NOT NULL CHECK (char_length(btrim(msg_content)) BETWEEN 1 AND 2000),
-    msg_time BIGINT NOT NULL DEFAULT extract(epoch FROM now())::bigint
-);
-CREATE INDEX idx_event_chat_msgs_event ON event_chat_msgs(event_id, msg_time);
+-- Every event has a group chat in chats_list / chat_msgs. These triggers keep
+-- its members in step with the event: the organizer joins when the event is
+-- posted, joiners are added and removed with joined_events, the name follows
+-- the event title, and deleting the event deletes the chat. SECURITY DEFINER
+-- because users can't write group chat rows themselves (see RLS below).
 
--- True if the logged-in user organizes or joined the event.
-CREATE OR REPLACE FUNCTION is_event_member(target_event TEXT) RETURNS boolean
-LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
-    SELECT EXISTS (
-        SELECT 1 FROM events
-        WHERE event_id = target_event AND organizer_uid = (SELECT auth.uid())::text
-    ) OR EXISTS (
-        SELECT 1 FROM joined_events
-        WHERE event_id = target_event AND joiner_uid = (SELECT auth.uid())::text
-    );
-$$;
+CREATE OR REPLACE FUNCTION public.group_chat_add_organizer() RETURNS trigger
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = '' AS $$
+BEGIN
+    INSERT INTO public.chats_list (chat_id, chat_name, user_id, event_id)
+    VALUES ('event:' || new.event_id, new.event_title, new.organizer_uid, new.event_id)
+    ON CONFLICT (chat_id, user_id) DO NOTHING;
+    RETURN new;
+END $$;
+CREATE OR REPLACE TRIGGER trg_group_chat_add_organizer AFTER INSERT ON events
+    FOR EACH ROW EXECUTE FUNCTION public.group_chat_add_organizer();
 
--- Only members read and send, only as themselves. No update or delete policy,
--- so sent messages can't be changed.
-ALTER TABLE event_chat_msgs ENABLE ROW LEVEL SECURITY;
-CREATE POLICY event_msgs_read ON event_chat_msgs FOR SELECT TO authenticated
-    USING (is_event_member(event_id));
-CREATE POLICY event_msgs_insert ON event_chat_msgs FOR INSERT TO authenticated
-    WITH CHECK (sender_uid = (SELECT auth.uid())::text AND is_event_member(event_id));
+CREATE OR REPLACE FUNCTION public.group_chat_add_joiner() RETURNS trigger
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = '' AS $$
+BEGIN
+    INSERT INTO public.chats_list (chat_id, chat_name, user_id, event_id)
+    SELECT 'event:' || e.event_id, e.event_title, new.joiner_uid, e.event_id
+    FROM public.events e WHERE e.event_id = new.event_id
+    ON CONFLICT (chat_id, user_id) DO NOTHING;
+    RETURN new;
+END $$;
+CREATE OR REPLACE TRIGGER trg_group_chat_add_joiner AFTER INSERT ON joined_events
+    FOR EACH ROW EXECUTE FUNCTION public.group_chat_add_joiner();
+
+-- The organizer stays in even if they leave their own event's join list.
+CREATE OR REPLACE FUNCTION public.group_chat_remove_joiner() RETURNS trigger
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = '' AS $$
+BEGIN
+    DELETE FROM public.chats_list c
+    USING public.events e
+    WHERE c.event_id = old.event_id AND c.user_id = old.joiner_uid
+        AND e.event_id = old.event_id AND e.organizer_uid <> old.joiner_uid;
+    RETURN old;
+END $$;
+CREATE OR REPLACE TRIGGER trg_group_chat_remove_joiner AFTER DELETE ON joined_events
+    FOR EACH ROW EXECUTE FUNCTION public.group_chat_remove_joiner();
+
+CREATE OR REPLACE FUNCTION public.group_chat_rename() RETURNS trigger
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = '' AS $$
+BEGIN
+    UPDATE public.chats_list SET chat_name = new.event_title WHERE event_id = new.event_id;
+    RETURN new;
+END $$;
+CREATE OR REPLACE TRIGGER trg_group_chat_rename AFTER UPDATE OF event_title ON events
+    FOR EACH ROW WHEN (old.event_title IS DISTINCT FROM new.event_title)
+    EXECUTE FUNCTION public.group_chat_rename();
+
+-- chats_list rows go with the event (ON DELETE CASCADE); chat_msgs has no
+-- foreign key, so its messages are removed here.
+CREATE OR REPLACE FUNCTION public.group_chat_delete_messages() RETURNS trigger
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = '' AS $$
+BEGIN
+    DELETE FROM public.chat_msgs WHERE chat_id = 'event:' || old.event_id;
+    RETURN old;
+END $$;
+CREATE OR REPLACE TRIGGER trg_group_chat_delete_messages BEFORE DELETE ON events
+    FOR EACH ROW EXECUTE FUNCTION public.group_chat_delete_messages();
 
 -- #region Notifications
 -- Types:
@@ -447,13 +485,19 @@ $$;
 
 CREATE POLICY chats_read ON chats_list FOR SELECT TO authenticated
     USING (is_chat_member(chat_id));
--- Add your own row first, then rows for the other participants
+-- Direct chats only: add your own row first, then rows for the other
+-- participant. Group chat rows (event_id set, or an 'event:' chat_id) come
+-- only from the triggers, so nobody can add themselves to a group.
 CREATE POLICY chats_insert ON chats_list FOR INSERT TO authenticated
-    WITH CHECK (user_id = (SELECT auth.uid())::text OR is_chat_member(chat_id));
+    WITH CHECK (
+        event_id IS NULL AND chat_id NOT LIKE 'event:%'
+        AND (user_id = (SELECT auth.uid())::text OR is_chat_member(chat_id))
+    );
 CREATE POLICY chats_update_own ON chats_list FOR UPDATE TO authenticated
-    USING (user_id = (SELECT auth.uid())::text) WITH CHECK (user_id = (SELECT auth.uid())::text);
+    USING (user_id = (SELECT auth.uid())::text AND event_id IS NULL)
+    WITH CHECK (user_id = (SELECT auth.uid())::text AND event_id IS NULL AND chat_id NOT LIKE 'event:%');
 CREATE POLICY chats_delete_own ON chats_list FOR DELETE TO authenticated
-    USING (user_id = (SELECT auth.uid())::text);
+    USING (user_id = (SELECT auth.uid())::text AND event_id IS NULL);
 
 CREATE POLICY msgs_read ON chat_msgs FOR SELECT TO authenticated
     USING (is_chat_member(chat_id));
