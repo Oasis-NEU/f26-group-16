@@ -10,6 +10,10 @@ export const secondaryButton =
 export const smallButton =
   'inline-flex items-center justify-center gap-1.5 rounded-lg border border-line bg-surface px-3 py-1.5 text-sm font-semibold text-ink hover:bg-brand-50 disabled:cursor-not-allowed disabled:opacity-60'
 
+// Confirms a destructive action, like deleting an event. Fills red on hover.
+export const dangerButton =
+  'inline-flex items-center justify-center gap-2 rounded-xl border border-danger bg-danger-50 px-6 py-3 font-semibold text-danger hover:bg-danger hover:text-surface disabled:cursor-not-allowed disabled:opacity-60'
+
 // Menu bar popups: right-aligned under the menu bar, or under their button on
 // wide screens.
 export const popupPanelClass =

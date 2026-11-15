@@ -2,6 +2,8 @@ import { useEffect, useId, useRef, useState } from 'react'
 import {
   COMMENT_MAX,
   addComment,
+  deleteComment,
+  deleteEvent,
   findOrCreateChat,
   getEvent,
   hasJoined,
@@ -11,13 +13,14 @@ import {
   listJoiners,
 } from '../api.jsx'
 import Avatar from '../components/Avatar.jsx'
+import ConfirmDialog from '../components/ConfirmDialog.jsx'
 import EventPicture from '../components/EventPicture.jsx'
 import UserName from '../components/UserName.jsx'
 import { ErrorMessage, Notice, inputClass, primaryButton, secondaryButton, smallButton } from '../components/ui.jsx'
 import { joinedCount } from '../utils/capacity.js'
 import { openChat, openGroupChat } from '../utils/chat_events.js'
 import { formatEventTime, formatTimestamp } from '../utils/format.js'
-import { HOME_PATH, editEventPath } from '../utils/routes.js'
+import { HOME_PATH, editEventPath, navigate } from '../utils/routes.js'
 import { showToast } from '../utils/toast.js'
 
 function InfoRow({ icon, label, children }) {
@@ -217,9 +220,9 @@ function JoinerList({ eventId, eventTitle, profile, refreshKey, isOrganizer }) {
 
 // `max` is the headcount limit (null = no limit). Once it's reached, people who
 // haven't joined see a disabled "Full" button; people already in can still leave.
-// Organizers can't join their own event: with `editHref` set, the Edit event
-// button takes the Join button's place.
-function JoinButton({ eventId, profile, initialCount, initialJoined, max, editHref, onChange }) {
+// Organizers can't join their own event: with `organizerActions` set (the Edit
+// and Delete buttons), those take the Join button's place.
+function JoinButton({ eventId, profile, initialCount, initialJoined, max, organizerActions, onChange }) {
   const [joined, setJoined] = useState(initialJoined)
   const [count, setCount] = useState(initialCount)
   const [busy, setBusy] = useState(false)
@@ -267,11 +270,7 @@ function JoinButton({ eventId, profile, initialCount, initialJoined, max, editHr
         )}
         {joined && <span className="font-semibold text-brand-600"> · including you</span>}
       </p>
-      {editHref ? (
-        <a href={editHref} className={`${secondaryButton} w-full`}>
-          <span aria-hidden="true">✏️</span> Edit event
-        </a>
-      ) : (
+      {organizerActions ?? (
         <button
           type="button"
           onClick={toggle}
@@ -283,6 +282,61 @@ function JoinButton({ eventId, profile, initialCount, initialJoined, max, editHr
         </button>
       )}
       <ErrorMessage message={error} />
+    </div>
+  )
+}
+
+// Edit and Delete buttons for the event's organizer. Delete asks first, then
+// goes back to the homepage.
+function OrganizerActions({ event }) {
+  const [confirming, setConfirming] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+
+  const remove = async () => {
+    setBusy(true)
+    setError('')
+    try {
+      await deleteEvent(event.event_id)
+      showToast('Event deleted.')
+      navigate(HOME_PATH)
+    } catch (err) {
+      setError(err.message)
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="space-y-2">
+      <a href={editEventPath(event.event_id)} className={`${secondaryButton} w-full`}>
+        <span aria-hidden="true">✏️</span> Edit event
+      </a>
+      <button
+        type="button"
+        onClick={() => setConfirming(true)}
+        aria-haspopup="dialog"
+        className="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-line bg-surface px-6 py-3 font-semibold text-danger hover:bg-danger-50"
+      >
+        <span aria-hidden="true">🗑️</span> Delete event
+      </button>
+      <ConfirmDialog
+        open={confirming}
+        title="Delete this event?"
+        confirmLabel="Delete event"
+        busyLabel="Deleting…"
+        busy={busy}
+        error={error}
+        onConfirm={remove}
+        onCancel={() => {
+          setConfirming(false)
+          setError('')
+        }}
+      >
+        <p>
+          <span className="font-semibold text-ink">{event.event_title}</span> will be gone for good, along with its
+          comments and everyone’s joins. This can’t be undone.
+        </p>
+      </ConfirmDialog>
     </div>
   )
 }
@@ -369,7 +423,8 @@ function CommentForm({ eventId, profile, replyingTo, onPosted, onCancel }) {
   )
 }
 
-function Comment({ comment, onReply }) {
+// `onDelete` is set only on your own comments.
+function Comment({ comment, onReply, onDelete }) {
   const initial = comment.sender?.is_active ? comment.sender.full_name.trim()[0]?.toUpperCase() : '?'
   return (
     <div className="flex gap-3">
@@ -382,9 +437,21 @@ function Comment({ comment, onReply }) {
           <span className="text-muted"> · {formatTimestamp(comment.comment_time)}</span>
         </p>
         <p className="mt-1 whitespace-pre-line break-words text-ink">{comment.comment_content}</p>
-        <button type="button" onClick={onReply} className="mt-1 text-sm font-semibold text-brand-600 hover:underline">
-          Reply
-        </button>
+        <div className="mt-1 flex gap-4">
+          <button type="button" onClick={onReply} className="text-sm font-semibold text-brand-600 hover:underline">
+            Reply
+          </button>
+          {onDelete && (
+            <button
+              type="button"
+              onClick={onDelete}
+              aria-haspopup="dialog"
+              className="text-sm font-semibold text-muted hover:text-danger hover:underline"
+            >
+              Delete
+            </button>
+          )}
+        </div>
       </div>
     </div>
   )
@@ -395,6 +462,10 @@ function Comments({ eventId, profile }) {
   const [retries, setRetries] = useState(0)
   // The main comment whose reply form is open.
   const [replyTo, setReplyTo] = useState(null)
+  // The comment waiting on the delete confirmation, plus that request's state.
+  const [toDelete, setToDelete] = useState(null)
+  const [deleting, setDeleting] = useState(false)
+  const [deleteError, setDeleteError] = useState('')
 
   useEffect(() => {
     let cancelled = false
@@ -410,6 +481,32 @@ function Comments({ eventId, profile }) {
     setResult((r) => ({ comments: [...r.comments, comment] }))
     setReplyTo(null)
   }
+
+  const askDelete = (comment) => {
+    setDeleteError('')
+    setToDelete(comment)
+  }
+
+  // Removes the comment and, for a main comment, its replies (the database
+  // deletes those too).
+  const confirmDelete = async () => {
+    const id = toDelete.comment_id
+    setDeleting(true)
+    setDeleteError('')
+    try {
+      await deleteComment(id)
+      setResult((r) => ({ comments: r.comments.filter((c) => c.comment_id !== id && c.replying_to !== id) }))
+      if (replyTo === id) setReplyTo(null)
+      setToDelete(null)
+      showToast('Comment deleted.')
+    } catch (err) {
+      setDeleteError(err.message)
+    }
+    setDeleting(false)
+  }
+
+  // Delete handler for a comment, only if you posted it.
+  const deleteHandler = (comment) => (comment.sender_uid === profile.uid ? () => askDelete(comment) : undefined)
 
   const comments = result?.comments ?? []
   const threads = comments
@@ -436,12 +533,17 @@ function Comments({ eventId, profile }) {
         <ul className="space-y-6">
           {threads.map(({ main, replies }) => (
             <li key={main.comment_id} className="space-y-4 rounded-2xl border border-line bg-surface p-5 shadow-sm">
-              <Comment comment={main} onReply={() => setReplyTo(main.comment_id)} />
+              <Comment comment={main} onReply={() => setReplyTo(main.comment_id)} onDelete={deleteHandler(main)} />
               {(replies.length > 0 || replyTo === main.comment_id) && (
                 <div className="space-y-4 border-l-2 border-brand-100 pl-4 sm:ml-12">
                   {replies.map((reply) => (
                     // Replying to a reply continues the main comment's thread.
-                    <Comment key={reply.comment_id} comment={reply} onReply={() => setReplyTo(main.comment_id)} />
+                    <Comment
+                      key={reply.comment_id}
+                      comment={reply}
+                      onReply={() => setReplyTo(main.comment_id)}
+                      onDelete={deleteHandler(reply)}
+                    />
                   ))}
                   {replyTo === main.comment_id && (
                     <CommentForm
@@ -458,6 +560,21 @@ function Comments({ eventId, profile }) {
           ))}
         </ul>
       )}
+      <ConfirmDialog
+        open={Boolean(toDelete)}
+        title={toDelete?.replying_to ? 'Delete this reply?' : 'Delete this comment?'}
+        confirmLabel="Delete"
+        busyLabel="Deleting…"
+        busy={deleting}
+        error={deleteError}
+        onConfirm={confirmDelete}
+        onCancel={() => setToDelete(null)}
+      >
+        <p>This can’t be undone.</p>
+        {toDelete && !toDelete.replying_to && comments.some((c) => c.replying_to === toDelete.comment_id) && (
+          <p>The replies under it will be deleted too.</p>
+        )}
+      </ConfirmDialog>
     </section>
   )
 }
@@ -565,7 +682,7 @@ export default function EventDetail({ eventId, profile }) {
             initialCount={joinedCount(event)}
             initialJoined={result.joined}
             max={event.max_participants}
-            editHref={isOrganizer ? editEventPath(event.event_id) : null}
+            organizerActions={isOrganizer ? <OrganizerActions event={event} /> : null}
             onChange={() => setJoinChanges((n) => n + 1)}
           />
           <JoinerList

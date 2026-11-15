@@ -49,11 +49,13 @@ The platform is open to any campus event: study sessions, club meetings, open mi
     - With a headcount limit it reads "4/10 joined · 6 spots left". Once full, the button is disabled and says "Full" for people who haven't joined; people already in can still leave
     - The database rejects joins past the limit (`trg_check_event_capacity`), so a stale page can't overfill an event. If that happens, the page shows "Sorry, this event just filled up." and switches to Full
 - Comments with replies
+    - Your own comments and replies have a "Delete" button next to "Reply". It asks first in a confirmation dialog; deleting a main comment also deletes its replies
 - "Direct message" button to contact the organizer
 - "👥 Group chat" button, shown only to the organizer and people who joined. It opens the event's group chat in the messages popup
 - "Who's going" list of people who joined, each with a message button to chat with them directly (not shown for yourself or deleted accounts)
 - If viewing as the event creator, an "Edit event" button takes the place of the "Join event" button (the creator can't join their own event; the joined count still shows). It opens the "edit event" page allowing for modifications of these fields
     - The form has an optional "How many people?" field (headcount limit, at least 2; empty = no limit). When editing, a limit below the people already joined shows a red warning and the form can't be saved
+    - A "Delete event" button sits below it. It asks first in a confirmation dialog, then deletes the event (with its comments and joins) and goes back to the homepage
 
 ### Personal schedule page
 
@@ -119,7 +121,7 @@ The platform is open to any campus event: study sessions, club meetings, open mi
 ### Action confirmations
 
 - A short message appears at the bottom of the screen for 3 seconds when an action works, so people know it went through
-- Used for: joining and leaving an event, posting a comment or reply, posting an event, and saving event changes. Call `showToast(message)` from `src/utils/toast.js` for new actions
+- Used for: joining and leaving an event, posting or deleting a comment or reply, posting an event, saving event changes, and deleting an event. Call `showToast(message)` from `src/utils/toast.js` for new actions
 - Failures don't use it: they stay next to the form as an `ErrorMessage`
 - Not needed when the result is already obvious, like a sent message appearing in the chat
 
@@ -293,6 +295,7 @@ src/
     EventPicture.jsx        # event picture, or the category glyph when there is none
     WeekCalendar.jsx        # week grid with hourly timeslots for the schedule page
     EventPopover.jsx        # hover/focus details popup for schedule calendar blocks
+    ConfirmDialog.jsx       # modal "are you sure?" popup for deleting things
     Logo.jsx                # SVG Husky logo that barks on hover
     menu_bar.jsx            # Top menu bar
     messages_popup.jsx      # Messages button + popup: direct and group chat list, open chat, 2-second polling

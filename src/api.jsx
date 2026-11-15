@@ -447,6 +447,13 @@ export async function addComment({ eventId, senderUid, content, replyingTo = nul
   return unwrap(await supabase.from('event_comments').insert(row).select(COMMENT_COLUMNS).single())
 }
 
+// RLS only lets the sender delete a comment. Deleting a main comment also
+// removes its replies (ON DELETE CASCADE), including other people's.
+export async function deleteComment(commentId) {
+  check(commentId, 'Missing comment.')
+  unwrap(await supabase.from('event_comments').delete().eq('comment_id', commentId))
+}
+
 // ---------- chats (direct and event group) ----------
 // A chat has one chats_list row per participant, sharing a chat_id, and its
 // messages are in chat_msgs.
