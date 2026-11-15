@@ -40,11 +40,12 @@ const COMMENT_COLUMNS = '*, sender:users(uid, full_name, is_active)'
 // each fetch small however long the chat gets.
 const MESSAGE_FETCH_LIMIT = 200
 
-// Notification rows come with `actor` (who did it: { uid, full_name, is_active })
-// and `event` ({ event_id, event_title }) attached. The foreign key is named
-// because notifications has two links to `users`.
+// Notification rows come with `actor` (who did it: { uid, full_name, is_active },
+// null for reminders) and `event` ({ event_id, event_title, start_time }, null
+// once the event is deleted) attached. The foreign key is named because
+// notifications has two links to `users`.
 const NOTIFICATION_COLUMNS =
-  '*, actor:users!notifications_actor_uid_fkey(uid, full_name, is_active), event:events(event_id, event_title)'
+  '*, actor:users!notifications_actor_uid_fkey(uid, full_name, is_active), event:events(event_id, event_title, start_time)'
 const NOTIFICATION_FETCH_LIMIT = 30
 
 function check(condition, message) {
@@ -557,11 +558,21 @@ export async function findOrCreateChat({ uid, otherUid, chatName }) {
 }
 
 // ---------- notifications ----------
-// A database trigger creates these (see docs/main_schema.sql), so the app only
-// reads them and marks them as read.
+// The database creates these (see docs/main_schema.sql), so the app only reads
+// them and marks them as read:
+// - event_joined: someone joined your event (trigger on joined_events)
+// - event_updated: an event you joined changed time or place; `details` holds
+//   the new values (trigger on events)
+// - event_deleted: an event you joined was deleted; `event_id` is then null and
+//   `event_title` keeps the name (trigger on events)
+// - event_reminder: an event you joined starts within the hour, made by
+//   create_due_reminders() below
 
-// Newest first.
+// Newest first. Also creates any reminders that are due, since there's no
+// server to run them on a schedule: the bell polls this every few seconds.
 export async function listNotifications(uid) {
+  // Best effort: if it fails, the list still loads and the next poll retries.
+  await supabase.rpc('create_due_reminders')
   return unwrap(
     await supabase
       .from('notifications')
