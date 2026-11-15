@@ -117,6 +117,7 @@ The platform is open to any campus event: study sessions, club meetings, open mi
 - Navigation buttons for homepage, personal schedule, and user profile pages placed on the right
 - Direct messages popup button placed to the adjacent left of the navigation buttons
 - Notification inbox button placed to the adjacent left of the direct messages button
+- Theme button (☀️/🌙) placed to the adjacent left of the notification inbox button; it switches between light and dark mode. Below `md` it moves into the ☰ menu as a "Light mode" / "Dark mode" item
 
 # Technical details
 
@@ -253,7 +254,7 @@ npm run build    # must pass before you finish
 The core components of the project are detailed as follows. Other files and parts can be added as needed.
 
 ```
-index.html                  # page shell + inline script that applies dark mode before first paint
+index.html                  # page shell + inline script that applies the saved theme (or the device setting) before first paint
 src/
   main.jsx                  # React entry
   index.css                 # Tailwind import, theme tokens, dark overrides, logo animation
@@ -289,6 +290,7 @@ src/
     use_dismiss.js          # useDismiss(): closes a popup on Escape or an outside click
     use_polling.js          # usePolling(): re-fetches data on a timer, keeps it through failures
     toast.js                # showToast(message): confirms an action from any page
+    theme.js                # useDarkMode(): light/dark switch, saved in localStorage as `numeet-theme`
     schedule.js             # schedule helpers: overlaps, conflicts, suggestions, block time labels
     calendar.js             # week calendar math: week start, day clipping, side-by-side layout
 scripts/
@@ -359,7 +361,7 @@ Examples: `bg-page`, `bg-surface`, `text-ink`, `text-muted`, `border-line`, `bg-
 ## Accessibility
 
 - Decorative SVGs get `aria-hidden="true"`. Icon-only buttons get an `aria-label`.
-- The entire interface supports dark mode (based on current browser settings)
+- The entire interface supports dark mode. It follows the device setting until the user picks a theme with the menu bar's ☀️/🌙 button; that choice is saved in the browser (`numeet-theme`) and wins from then on
 - Inputs without visible labels need an `aria-label`.
 - Animations must be disabled under `prefers-reduced-motion: reduce`.
 
