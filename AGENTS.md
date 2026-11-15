@@ -35,6 +35,7 @@ The platform is open to any campus event: study sessions, club meetings, open mi
 
 - Displayed when the user is logged in
 - The home page lists the available events in a grid view, detailing the picture, title, date, and organizer (account) of the event
+    - Events with a headcount limit also show "4/10 · 6 spots left" (or "10/10 · Full" in `danger` red) on the card. Events without a limit show no count
 - The user can choose different categories (e.g. sport, entertainment) to filter events
     - Additional filters like date range
 - "Post an event" button that opens the edit event page in create mode (same form, empty)
@@ -44,11 +45,14 @@ The platform is open to any campus event: study sessions, club meetings, open mi
 - Each post includes a picture, title, description & location, category, and the start/end date of the event with the organizer (account) of it
     - If picture not present, use a placeholder glyph instead
 - "Join event" button with a display of how many people already joined/subscribed
+    - With a headcount limit it reads "4/10 joined · 6 spots left". Once full, the button is disabled and says "Full" for people who haven't joined; people already in can still leave
+    - The database rejects joins past the limit (`trg_check_event_capacity`), so a stale page can't overfill an event. If that happens, the page shows "Sorry, this event just filled up." and switches to Full
 - Comments with replies
 - "Direct message" button to contact the organizer
 - "👥 Group chat" button, shown only to the organizer and people who joined. It opens the event's group chat in the messages popup
 - "Who's going" list of people who joined, each with a message button to chat with them directly (not shown for yourself or deleted accounts)
 - If viewing as the event creator, a button that opens an "edit event" page allowing for modifications of these fields
+    - The form has an optional "How many people?" field (headcount limit, at least 2; empty = no limit). When editing, a limit below the people already joined shows a red warning and the form can't be saved
 
 ### Personal schedule page
 
@@ -70,7 +74,7 @@ The platform is open to any campus event: study sessions, club meetings, open mi
 - If the week has no joined events, a status line says so, with a "Jump to your next event" button (or a link to browse events if the user hasn't joined anything)
 - "Suggest events" switch: off by default, held only in page state (not saved in the database or browser storage), so it's off again on every visit
     - While on, events that fit the user's open time show as dashed blocks in that week, with a "+" button that joins the event
-    - Open time is any time not taken by a joined event (there is no availability table). A suggestion must not overlap a joined event, not be organized by the user, not be joined already, and not have started
+    - Open time is any time not taken by a joined event (there is no availability table). A suggestion must not overlap a joined event, not be organized by the user, not be joined already, not be full, and not have started
     - At most 8 suggestions per week. Categories the user joins most come first, then the soonest
     - Suggestions are fetched per week only while the switch is on, and reused when toggling or returning to a week. Past weeks get none
 - Joining and removing update the calendar right away and roll back with an error message if the request fails
@@ -102,8 +106,12 @@ The platform is open to any campus event: study sessions, club meetings, open mi
 ### Notification inbox
 
 - Bell button in the menu bar with a badge showing the number of unread notifications (updates every 5 seconds)
-- Popup lists the newest 30 notifications, each saying what happened and when, and links to the event
-- For now the only notification is "<name> joined <event>", sent to the organizer. Joining your own event sends nothing, and leaving and rejoining doesn't notify again
+- Popup lists the newest 30 notifications, each saying what happened and when, and links to the event (except for deleted events, which have no page)
+- Notification types (`notification_type`):
+    - `event_joined`: "<name> joined <event>", sent to the organizer. Joining your own event sends nothing, and leaving and rejoining doesn't notify again
+    - `event_updated`: "<event> changed: now <new time>, at <new place>", sent to everyone who joined when the organizer changes the time or location. Only the parts that changed are listed
+    - `event_deleted`: "<name> deleted <event>", sent to everyone who joined. Deleting an event is how organizers cancel it (there's no separate cancel state). Older notifications about the event are removed
+    - `event_reminder`: "Reminder: <event> starts at <time>", sent to everyone who joined, within the hour before it starts. There's no server to run a schedule, so `listNotifications()` calls the `create_due_reminders()` database function on every poll; it makes each reminder once. If you don't open the app during that hour, no reminder is made (there are no push notifications or emails anyway). Changing the start time clears old reminders so a new one comes for the new time
 - Opening the popup marks everything as read; those stay highlighted until it closes
 - If couldn't connect to server, display a small banner in the popup saying so and keep retrying
 
@@ -139,8 +147,10 @@ The platform is open to any campus event: study sessions, club meetings, open mi
 - Table of event categories
     - Category ID, name
 - Table for events created
-    - Title, picture (encode as WebP at 1920x1080 max), start & end date, organizer UID, unique event ID, category
-    - Backend validation: Title ≤ 100 chars; prevent user from choosing end date earlier than start date, etc.
+    - Title, picture (encode as WebP at 1920x1080 max), start & end date, organizer UID, unique event ID, category, headcount limit (`max_participants`, NULL = no limit)
+    - Backend validation: Title ≤ 100 chars; prevent user from choosing end date earlier than start date; headcount limit ≥ 2, etc.
+    - Headcount triggers: `trg_check_event_capacity` rejects a join once the event is full (error `event_full`), and `trg_check_capacity_not_below_joined` rejects lowering the limit below the people already joined (error `capacity_below_joined`)
+    - Event rows from `api.jsx` carry `joined: [{ count }]`. Read it with `joinedCount(event)`, and use `isFull(event)` / `spotsLabel(count, max)` from `src/utils/capacity.js`
 - Table for comments
     - Each entry contains the event ID which the comment belongs to
     - Comment content, sender UID, comment ID, replying comment ID, date
@@ -154,8 +164,8 @@ The platform is open to any campus event: study sessions, club meetings, open mi
     - Message ID, event ID, sender UID, content (1–2000 chars), date. Deleted with the event
     - No membership table: members are the organizer plus `joined_events`. The `is_event_member(event_id)` function backs RLS, so only members can read, and they can only send as themselves. Messages can't be edited or deleted
 - Table for notifications
-    - Notification ID, recipient UID, actor UID (who did it), event ID, type, date, read flag
-    - Rows are only created by the `on_event_joined` database trigger. Users can read their own and change only `is_read`
+    - Notification ID, recipient UID, actor UID (who did it; NULL for reminders), event ID (NULL once the event is deleted), event title (saved so deleted events still have a name), type, details (JSON: the new time/place for `event_updated`), date, read flag
+    - Rows are only created by database code: the `on_event_joined`, `on_event_updated`, and `on_event_deleted` triggers and the `create_due_reminders()` function. Users can read their own and change only `is_read`
 
 All date and time values are represented using UNIX timestamps in seconds. Use a separate library to encode uploaded picture as WebP to support Safari.
 
@@ -227,7 +237,7 @@ Notification functions in `src/api.jsx`:
 
 | Function | What it does |
 |---|---|
-| `listNotifications(uid)` | The user's newest 30 notifications with `actor` and `event` attached, newest first |
+| `listNotifications(uid)` | Creates any due reminders (`create_due_reminders()`), then returns the user's newest 30 notifications with `actor` and `event` attached, newest first. `event` is null for deleted events; use the row's `event_title` then |
 | `markNotificationsRead(uid)` | Marks all of the user's unread notifications as read |
 
 Direct message functions in `src/api.jsx`:
@@ -296,6 +306,7 @@ src/
     supabase.js             # Supabase client (only api.jsx imports it)
     routes.js               # hash routes: path builders, useRoute(), navigate()
     format.js               # dates, "Deleted account" names, category glyphs
+    capacity.js             # headcount: joinedCount(), isFull(), spotsLabel()
     chat_events.js          # openChat(key) / openGroupChat(eventId): opens the messages popup from any page
     use_dismiss.js          # useDismiss(): closes a popup on Escape or an outside click
     use_polling.js          # usePolling(): re-fetches data on a timer, keeps it through failures

@@ -1,8 +1,10 @@
 import { useEffect, useId, useState } from 'react'
 import {
+  CAPACITY_MIN,
   DESCRIPTION_MAX,
   LOCATION_MAX,
   TITLE_MAX,
+  capacityBelowJoinedMessage,
   createEvent,
   fileToDataUrl,
   getEvent,
@@ -10,11 +12,13 @@ import {
   updateEvent,
 } from '../api.jsx'
 import { ErrorMessage, Notice, inputClass, primaryButton, secondaryButton, smallButton } from '../components/ui.jsx'
+import { joinedCount } from '../utils/capacity.js'
 import { categoryEmoji, fromDateTimeInput, toDateTimeInput } from '../utils/format.js'
 import { HOME_PATH, eventPath, navigate } from '../utils/routes.js'
 import { showToast } from '../utils/toast.js'
 
-function Field({ id, label, optional, hint, children }) {
+// `warning` shows in red under the field, in place of the hint.
+function Field({ id, label, optional, hint, warning, children }) {
   return (
     <div>
       <label htmlFor={id} className="mb-1.5 block text-sm font-semibold text-ink">
@@ -22,10 +26,19 @@ function Field({ id, label, optional, hint, children }) {
         {optional && <span className="font-normal text-muted"> (optional)</span>}
       </label>
       {children}
-      {hint && <p className="mt-1.5 text-xs text-muted">{hint}</p>}
+      {warning ? (
+        <p role="alert" className="mt-1.5 text-xs font-semibold text-danger">
+          {warning}
+        </p>
+      ) : (
+        hint && <p className="mt-1.5 text-xs text-muted">{hint}</p>
+      )}
     </div>
   )
 }
+
+// The headcount input holds a string; empty means no limit.
+const parseHeadcount = (value) => (value.trim() === '' ? null : Number(value))
 
 function PictureField({ picture, categoryId, onChange }) {
   const [converting, setConverting] = useState(false)
@@ -87,8 +100,14 @@ function EventForm({ categories, event, profile }) {
   const [location, setLocation] = useState(event?.location ?? '')
   const [description, setDescription] = useState(event?.event_description ?? '')
   const [picture, setPicture] = useState(event?.picture_data ?? null)
+  const [headcount, setHeadcount] = useState(event?.max_participants?.toString() ?? '')
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
+
+  // When editing, warn as soon as the limit is below the people already in.
+  const joined = event ? joinedCount(event) : 0
+  const limit = parseHeadcount(headcount)
+  const headcountWarning = limit != null && limit < joined ? capacityBelowJoinedMessage(joined) : ''
 
   const submit = async (e) => {
     e.preventDefault()
@@ -102,6 +121,7 @@ function EventForm({ categories, event, profile }) {
       endTime: fromDateTimeInput(end),
       categoryId: categoryId || null,
       pictureData: picture,
+      maxParticipants: limit,
     }
     try {
       const saved = event
@@ -160,6 +180,30 @@ function EventForm({ categories, event, profile }) {
           />
         </Field>
       </div>
+      <Field
+        id={`${ids}-headcount`}
+        label="How many people?"
+        optional
+        hint={
+          event && joined > 0
+            ? `${joined} joined so far. Leave empty for no limit.`
+            : `Leave empty for no limit. At least ${CAPACITY_MIN}.`
+        }
+        warning={headcountWarning}
+      >
+        <input
+          id={`${ids}-headcount`}
+          type="number"
+          inputMode="numeric"
+          min={CAPACITY_MIN}
+          step={1}
+          value={headcount}
+          onChange={(e) => setHeadcount(e.target.value)}
+          placeholder="No limit"
+          aria-invalid={Boolean(headcountWarning)}
+          className={`${inputClass} sm:max-w-48`}
+        />
+      </Field>
       <Field id={`${ids}-location`} label="Location" optional>
         <input
           id={`${ids}-location`}
@@ -187,7 +231,7 @@ function EventForm({ categories, event, profile }) {
         <a href={event ? eventPath(event.event_id) : HOME_PATH} className={secondaryButton}>
           Cancel
         </a>
-        <button type="submit" disabled={busy} className={primaryButton}>
+        <button type="submit" disabled={busy || Boolean(headcountWarning)} className={primaryButton}>
           {busy ? 'Saving…' : event ? 'Save changes' : 'Post event'}
         </button>
       </div>

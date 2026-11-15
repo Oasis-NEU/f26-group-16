@@ -2,7 +2,6 @@ import { useEffect, useId, useRef, useState } from 'react'
 import {
   COMMENT_MAX,
   addComment,
-  countJoiners,
   findOrCreateChat,
   getEvent,
   hasJoined,
@@ -15,6 +14,7 @@ import Avatar from '../components/Avatar.jsx'
 import EventPicture from '../components/EventPicture.jsx'
 import UserName from '../components/UserName.jsx'
 import { ErrorMessage, Notice, inputClass, primaryButton, secondaryButton, smallButton } from '../components/ui.jsx'
+import { joinedCount } from '../utils/capacity.js'
 import { openChat, openGroupChat } from '../utils/chat_events.js'
 import { formatEventTime, formatTimestamp } from '../utils/format.js'
 import { HOME_PATH, editEventPath } from '../utils/routes.js'
@@ -214,11 +214,15 @@ function JoinerList({ eventId, eventTitle, profile, refreshKey }) {
   )
 }
 
-function JoinButton({ eventId, profile, initialCount, initialJoined, onChange }) {
+// `max` is the headcount limit (null = no limit). Once it's reached, people who
+// haven't joined see a disabled "Full" button; people already in can still leave.
+function JoinButton({ eventId, profile, initialCount, initialJoined, max, onChange }) {
   const [joined, setJoined] = useState(initialJoined)
   const [count, setCount] = useState(initialCount)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const full = max != null && count >= max
+  const left = max != null ? Math.max(0, max - count) : null
 
   // Updates right away, then rolls back if the request fails.
   const toggle = async () => {
@@ -233,7 +237,9 @@ function JoinButton({ eventId, profile, initialCount, initialJoined, onChange })
       onChange?.()
     } catch (err) {
       setJoined(!next)
-      setCount((c) => c - (next ? 1 : -1))
+      // Someone else took the last spot: show it as full instead of rolling back.
+      if (err.code === 'event_full') setCount(max)
+      else setCount((c) => c - (next ? 1 : -1))
       setError(err.message)
     }
     setBusy(false)
@@ -242,17 +248,30 @@ function JoinButton({ eventId, profile, initialCount, initialJoined, onChange })
   return (
     <div className="space-y-3">
       <p className="text-sm text-muted" aria-live="polite">
-        <span className="text-2xl font-extrabold text-ink">{count}</span> {count === 1 ? 'person' : 'people'} joined
+        {max == null ? (
+          <>
+            <span className="text-2xl font-extrabold text-ink">{count}</span> {count === 1 ? 'person' : 'people'} joined
+          </>
+        ) : (
+          <>
+            <span className="text-2xl font-extrabold text-ink">{count}</span>/{max} joined ·{' '}
+            {full ? (
+              <span className="font-semibold text-danger">Full</span>
+            ) : (
+              `${left} ${left === 1 ? 'spot' : 'spots'} left`
+            )}
+          </>
+        )}
         {joined && <span className="font-semibold text-brand-600"> · including you</span>}
       </p>
       <button
         type="button"
         onClick={toggle}
-        disabled={busy}
+        disabled={busy || (full && !joined)}
         aria-pressed={joined}
         className={`${joined ? secondaryButton : primaryButton} w-full`}
       >
-        {joined ? 'Leave event' : 'Join event'}
+        {joined ? 'Leave event' : full ? 'Full' : 'Join event'}
       </button>
       <ErrorMessage message={error} />
     </div>
@@ -458,8 +477,9 @@ export default function EventDetail({ eventId, profile }) {
 
   useEffect(() => {
     let cancelled = false
-    Promise.all([getEvent(eventId), countJoiners(eventId), hasJoined(eventId, profile.uid)])
-      .then(([event, joinCount, joined]) => !cancelled && setResult({ event, joinCount, joined }))
+    // getEvent() includes the joined count, so there's no separate count request.
+    Promise.all([getEvent(eventId), hasJoined(eventId, profile.uid)])
+      .then(([event, joined]) => !cancelled && setResult({ event, joined }))
       .catch((err) => !cancelled && setResult({ error: err.message }))
     return () => {
       cancelled = true
@@ -533,8 +553,9 @@ export default function EventDetail({ eventId, profile }) {
           <JoinButton
             eventId={event.event_id}
             profile={profile}
-            initialCount={result.joinCount}
+            initialCount={joinedCount(event)}
             initialJoined={result.joined}
+            max={event.max_participants}
             onChange={() => setJoinChanges((n) => n + 1)}
           />
           <JoinerList eventId={event.event_id} eventTitle={event.event_title} profile={profile} refreshKey={joinChanges} />

@@ -114,6 +114,8 @@ CREATE TABLE events(
         picture_data LIKE 'data:image/webp;base64,%'
         AND octet_length(picture_data) <= 13981039
     ),
+    -- Headcount limit; NULL = no limit (see the capacity triggers under Joined events)
+    max_participants INTEGER CHECK (max_participants IS NULL OR max_participants >= 2),
     CONSTRAINT chk_event_times CHECK (end_time IS NULL OR end_time >= start_time)
 );
 
@@ -156,6 +158,50 @@ CREATE TABLE joined_events(
     joiner_uid TEXT NOT NULL REFERENCES users(uid) ON UPDATE CASCADE,
     CONSTRAINT uc_event_joiner UNIQUE (event_id, joiner_uid)
 );
+
+-- Reject joins once an event reaches max_participants. Locking the event row
+-- makes two people who join at the same moment take turns, so they can't both
+-- get the last spot. SECURITY DEFINER because joiners can't lock someone
+-- else's event under RLS.
+CREATE OR REPLACE FUNCTION public.check_event_capacity() RETURNS trigger
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = '' AS $$
+DECLARE
+    max_count INTEGER;
+BEGIN
+    SELECT max_participants INTO max_count FROM public.events
+    WHERE event_id = NEW.event_id FOR UPDATE;
+
+    -- Already joined: let the unique constraint handle it (the app treats that as success)
+    IF EXISTS (
+        SELECT 1 FROM public.joined_events
+        WHERE event_id = NEW.event_id AND joiner_uid = NEW.joiner_uid
+    ) THEN
+        RETURN NEW;
+    END IF;
+
+    IF max_count IS NOT NULL AND (
+        SELECT count(*) FROM public.joined_events WHERE event_id = NEW.event_id
+    ) >= max_count THEN
+        RAISE EXCEPTION 'event_full' USING ERRCODE = 'check_violation';
+    END IF;
+    RETURN NEW;
+END $$;
+CREATE OR REPLACE TRIGGER trg_check_event_capacity BEFORE INSERT ON joined_events
+    FOR EACH ROW EXECUTE FUNCTION public.check_event_capacity();
+
+-- Reject lowering max_participants below the people who already joined.
+CREATE OR REPLACE FUNCTION check_capacity_not_below_joined() RETURNS trigger
+LANGUAGE plpgsql SET search_path = public AS $$
+BEGIN
+    IF NEW.max_participants IS NOT NULL AND (
+        SELECT count(*) FROM joined_events WHERE event_id = NEW.event_id
+    ) > NEW.max_participants THEN
+        RAISE EXCEPTION 'capacity_below_joined' USING ERRCODE = 'check_violation';
+    END IF;
+    RETURN NEW;
+END $$;
+CREATE OR REPLACE TRIGGER trg_check_capacity_not_below_joined BEFORE UPDATE OF max_participants ON events
+    FOR EACH ROW EXECUTE FUNCTION check_capacity_not_below_joined();
 
 -- #region Chats list
 -- (create rows for each user)
@@ -210,19 +256,37 @@ CREATE POLICY event_msgs_insert ON event_chat_msgs FOR INSERT TO authenticated
     WITH CHECK (sender_uid = (SELECT auth.uid())::text AND is_event_member(event_id));
 
 -- #region Notifications
+-- Types:
+--   event_joined   someone joined your event (to the organizer)
+--   event_updated  an event you joined changed time or place (to joiners)
+--   event_deleted  an event you joined was deleted (to joiners)
+--   event_reminder an event you joined starts within the hour (to joiners)
 CREATE TABLE notifications(
     notification_id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
     recipient_uid TEXT NOT NULL REFERENCES users(uid) ON UPDATE CASCADE,
-    actor_uid TEXT NOT NULL REFERENCES users(uid) ON UPDATE CASCADE,
-    event_id TEXT NOT NULL REFERENCES events(event_id) ON DELETE CASCADE,
-    notification_type TEXT NOT NULL CHECK (notification_type IN ('event_joined')),
+    -- Who did it; NULL for reminders
+    actor_uid TEXT REFERENCES users(uid) ON UPDATE CASCADE,
+    -- Set to NULL when the event is deleted, so event_deleted notices stay
+    event_id TEXT REFERENCES events(event_id) ON DELETE SET NULL,
+    -- Title when the notification was made (shown once the event is gone)
+    event_title TEXT,
+    notification_type TEXT NOT NULL CHECK (
+        notification_type IN ('event_joined', 'event_updated', 'event_deleted', 'event_reminder')
+    ),
+    -- event_updated: the new values of what changed, e.g. {"location": "Snell 101"}
+    -- or {"start_time": 1763830800, "end_time": null}
+    details JSONB,
     create_time BIGINT NOT NULL DEFAULT extract(epoch FROM now())::bigint,
-    is_read BOOLEAN NOT NULL DEFAULT false,
-    -- Leaving and rejoining an event doesn't notify the organizer again
-    CONSTRAINT uc_notification UNIQUE (recipient_uid, actor_uid, event_id, notification_type)
+    is_read BOOLEAN NOT NULL DEFAULT false
 );
 
 CREATE INDEX idx_notifications_recipient ON notifications(recipient_uid, create_time);
+-- Leaving and rejoining an event doesn't notify the organizer again
+CREATE UNIQUE INDEX uq_notification_joined ON notifications(recipient_uid, actor_uid, event_id)
+    WHERE notification_type = 'event_joined';
+-- One reminder per person per event
+CREATE UNIQUE INDEX uq_notification_reminder ON notifications(recipient_uid, event_id)
+    WHERE notification_type = 'event_reminder';
 
 -- Tells the organizer when someone else joins their event.
 -- SECURITY DEFINER because the joiner can't write to the organizer's inbox.
@@ -232,17 +296,102 @@ LANGUAGE plpgsql
 SECURITY DEFINER SET search_path = ''
 AS $$
 BEGIN
-  INSERT INTO public.notifications (recipient_uid, actor_uid, event_id, notification_type)
-  SELECT e.organizer_uid, new.joiner_uid, new.event_id, 'event_joined'
+  INSERT INTO public.notifications (recipient_uid, actor_uid, event_id, event_title, notification_type)
+  SELECT e.organizer_uid, new.joiner_uid, new.event_id, e.event_title, 'event_joined'
   FROM public.events e
   WHERE e.event_id = new.event_id AND e.organizer_uid <> new.joiner_uid
-  ON CONFLICT ON CONSTRAINT uc_notification DO NOTHING;
+  ON CONFLICT (recipient_uid, actor_uid, event_id) WHERE notification_type = 'event_joined' DO NOTHING;
   RETURN new;
 END;
 $$;
 CREATE OR REPLACE TRIGGER on_event_joined
   AFTER INSERT ON joined_events
   FOR EACH ROW EXECUTE FUNCTION public.notify_event_joined();
+
+-- Tells everyone who joined when the time or place changes. `details` holds
+-- the new values of what changed. A new start time also clears old reminders
+-- so a fresh one is made for the new time.
+CREATE OR REPLACE FUNCTION public.notify_event_updated()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER SET search_path = ''
+AS $$
+DECLARE
+  changes JSONB := '{}'::jsonb;
+BEGIN
+  IF new.start_time IS DISTINCT FROM old.start_time OR new.end_time IS DISTINCT FROM old.end_time THEN
+    changes := changes || jsonb_build_object('start_time', new.start_time, 'end_time', new.end_time);
+  END IF;
+  IF new.location IS DISTINCT FROM old.location THEN
+    changes := changes || jsonb_build_object('location', new.location);
+  END IF;
+  IF changes = '{}'::jsonb THEN
+    RETURN new;
+  END IF;
+
+  IF new.start_time IS DISTINCT FROM old.start_time THEN
+    DELETE FROM public.notifications
+    WHERE event_id = new.event_id AND notification_type = 'event_reminder';
+  END IF;
+
+  INSERT INTO public.notifications (recipient_uid, actor_uid, event_id, event_title, notification_type, details)
+  SELECT j.joiner_uid, new.organizer_uid, new.event_id, new.event_title, 'event_updated', changes
+  FROM public.joined_events j
+  WHERE j.event_id = new.event_id AND j.joiner_uid <> new.organizer_uid;
+  RETURN new;
+END;
+$$;
+CREATE OR REPLACE TRIGGER on_event_updated
+  AFTER UPDATE OF start_time, end_time, location ON events
+  FOR EACH ROW EXECUTE FUNCTION public.notify_event_updated();
+
+-- Tells everyone who joined when an event is deleted. Runs BEFORE DELETE,
+-- while joined_events still lists them. Older notifications about the event
+-- are removed, since they'd link to a page that no longer exists.
+CREATE OR REPLACE FUNCTION public.notify_event_deleted()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER SET search_path = ''
+AS $$
+BEGIN
+  DELETE FROM public.notifications WHERE event_id = old.event_id;
+  INSERT INTO public.notifications (recipient_uid, actor_uid, event_id, event_title, notification_type)
+  SELECT j.joiner_uid, old.organizer_uid, old.event_id, old.event_title, 'event_deleted'
+  FROM public.joined_events j
+  WHERE j.event_id = old.event_id AND j.joiner_uid <> old.organizer_uid;
+  RETURN old;
+END;
+$$;
+CREATE OR REPLACE TRIGGER on_event_deleted
+  BEFORE DELETE ON events
+  FOR EACH ROW EXECUTE FUNCTION public.notify_event_deleted();
+
+-- Creates "starts within the hour" reminders for the calling user's joined
+-- events. There's no server to run this on a schedule, so the app calls it
+-- each time it checks notifications (listNotifications in src/api.jsx).
+-- Each reminder is made once (uq_notification_reminder).
+CREATE OR REPLACE FUNCTION public.create_due_reminders()
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER SET search_path = ''
+AS $$
+DECLARE
+  me TEXT := (SELECT auth.uid())::text;
+  now_s BIGINT := extract(epoch FROM now())::bigint;
+BEGIN
+  IF me IS NULL THEN
+    RETURN;
+  END IF;
+  INSERT INTO public.notifications (recipient_uid, event_id, event_title, notification_type)
+  SELECT me, e.event_id, e.event_title, 'event_reminder'
+  FROM public.joined_events j
+  JOIN public.events e ON e.event_id = j.event_id
+  WHERE j.joiner_uid = me AND e.start_time > now_s AND e.start_time <= now_s + 3600
+  ON CONFLICT (recipient_uid, event_id) WHERE notification_type = 'event_reminder' DO NOTHING;
+END;
+$$;
+REVOKE EXECUTE ON FUNCTION public.create_due_reminders() FROM public, anon;
+GRANT EXECUTE ON FUNCTION public.create_due_reminders() TO authenticated;
 
 -- Indexes for common lookups
 CREATE INDEX idx_events_start_time ON events(start_time);
@@ -311,7 +460,7 @@ CREATE POLICY msgs_read ON chat_msgs FOR SELECT TO authenticated
 CREATE POLICY msgs_insert ON chat_msgs FOR INSERT TO authenticated
     WITH CHECK (sender_uid = (SELECT auth.uid())::text AND is_chat_member(chat_id));
 
--- Only the trigger below creates notifications, so there's no insert policy
+-- Only the triggers and create_due_reminders() create notifications, so there's no insert policy
 CREATE POLICY notifications_read_own ON notifications FOR SELECT TO authenticated
     USING (recipient_uid = (SELECT auth.uid())::text);
 CREATE POLICY notifications_update_own ON notifications FOR UPDATE TO authenticated

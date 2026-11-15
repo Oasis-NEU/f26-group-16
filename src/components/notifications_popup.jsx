@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { listNotifications, markNotificationsRead } from '../api.jsx'
-import { displayName, formatTimestamp } from '../utils/format.js'
+import { displayName, formatEventTime, formatTimestamp } from '../utils/format.js'
 import { eventPath } from '../utils/routes.js'
 import { useDismiss } from '../utils/use_dismiss.js'
 import { usePolling } from '../utils/use_polling.js'
@@ -10,11 +10,35 @@ import { ConnectionBanner, PopupNote, popupPanelClass } from './ui.jsx'
 // unread count on the button up to date.
 const POLL_MS = 5000
 
+const timeOnly = new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' })
+
+// "now Sat, Nov 22 · 3:00 PM, at Snell 101". `details` only has the fields
+// that changed (see notify_event_updated in docs/main_schema.sql).
+function describeChanges(details) {
+  const parts = []
+  if (details?.start_time != null) parts.push(`now ${formatEventTime(details.start_time, details.end_time)}`)
+  if (details && 'location' in details) parts.push(details.location ? `at ${details.location}` : 'location to be announced')
+  return parts.join(', ')
+}
+
 function notificationText(notification) {
   const actor = displayName(notification.actor)
-  const title = notification.event?.event_title
-  if (notification.notification_type === 'event_joined') return `${actor} joined ${title}`
-  return title
+  // The live title, or the saved one once the event is deleted.
+  const title = notification.event?.event_title ?? notification.event_title
+  switch (notification.notification_type) {
+    case 'event_joined':
+      return `${actor} joined ${title}`
+    case 'event_updated':
+      return `${title} changed: ${describeChanges(notification.details)}`
+    case 'event_deleted':
+      return `${actor} deleted ${title}`
+    case 'event_reminder':
+      return notification.event
+        ? `Reminder: ${title} starts at ${timeOnly.format(new Date(notification.event.start_time * 1000))}`
+        : `Reminder: ${title} starts soon`
+    default:
+      return title
+  }
 }
 
 // Mounted only while open. Marks everything as read as it arrives; those stay
@@ -36,21 +60,36 @@ function NotificationsPanel({ notifications, failed, unreadIds, uid, refresh, on
       <ConnectionBanner show={failed} />
       <div className="min-h-0 flex-1 overflow-y-auto">
         {notifications === null && !failed && <PopupNote>Loading…</PopupNote>}
-        {notifications?.length === 0 && <PopupNote>Nothing yet. You’ll see it here when someone joins your event.</PopupNote>}
+        {notifications?.length === 0 && (
+          <PopupNote>Nothing yet. Joins, changes to your events, and reminders show up here.</PopupNote>
+        )}
         {notifications?.length > 0 && (
           <ul className="divide-y divide-line">
-            {notifications.map((notification) => (
-              <li key={notification.notification_id}>
-                <a
-                  href={eventPath(notification.event_id)}
-                  onClick={onClose}
-                  className={`block px-5 py-3 ${highlighted.has(notification.notification_id) ? 'bg-brand-100' : 'hover:bg-brand-50'}`}
-                >
+            {notifications.map((notification) => {
+              const highlight = highlighted.has(notification.notification_id) ? 'bg-brand-100' : ''
+              const body = (
+                <>
                   <span className="block break-words text-sm text-ink">{notificationText(notification)}</span>
                   <span className="mt-0.5 block text-xs text-muted">{formatTimestamp(notification.create_time)}</span>
-                </a>
-              </li>
-            ))}
+                </>
+              )
+              return (
+                <li key={notification.notification_id}>
+                  {/* A deleted event has no page to open. */}
+                  {notification.event_id ? (
+                    <a
+                      href={eventPath(notification.event_id)}
+                      onClick={onClose}
+                      className={`block px-5 py-3 ${highlight || 'hover:bg-brand-50'}`}
+                    >
+                      {body}
+                    </a>
+                  ) : (
+                    <div className={`px-5 py-3 ${highlight}`}>{body}</div>
+                  )}
+                </li>
+              )
+            })}
           </ul>
         )}
       </div>

@@ -22,6 +22,7 @@ description: Build or change a NUMeet page, component, or Supabase data function
   - Select users with `USER_COLUMNS`, events with `EVENT_COLUMNS` (adds `organizer` and `category`), and comments with `COMMENT_COLUMNS` (adds `sender`), so every page gets the same shape.
 - Validation rules (enforce in `api.jsx`, not only in the form). They mirror the CHECK constraints in `AGENTS.md`, so change both together:
   - Event title is required and at most 100 characters; description ≤ 5000; location ≤ 200; comments 1–2000.
+  - Headcount limit (`max_participants`) is optional; if set, at least 2 and never below the people already joined. The database also rejects joins past the limit.
   - End time is optional, but if set, `end_time >= start_time`.
   - Pictures are stored as `data:image/webp;base64,...`, at most 10MB. Always convert uploads with `fileToDataUrl(file)`: it resizes to fit 1920x1080 and encodes WebP with `@jsquash/webp` (Safari's canvas can't).
   - Replies only point at a main comment (`replying_to` of a reply is the main comment's id).

@@ -4,6 +4,7 @@
 //
 // Times are stored as UNIX timestamps in seconds (BIGINT columns).
 
+import { joinedCount } from './utils/capacity.js'
 import { supabase } from './utils/supabase.js'
 
 export const TITLE_MAX = 100
@@ -13,6 +14,8 @@ export const COMMENT_MAX = 2000
 export const MESSAGE_MAX = 2000
 export const CHAT_NAME_MAX = 100
 export const IMAGE_MAX_BYTES = 10 * 1024 * 1024
+// Smallest headcount limit an event can have (matches the CHECK on max_participants).
+export const CAPACITY_MIN = 2
 
 // Pictures are stored as WebP data URLs. The length limit matches the CHECK
 // rule on picture columns: the prefix plus the base64 of 10 MiB.
@@ -24,9 +27,11 @@ const nowSeconds = () => Math.floor(Date.now() / 1000)
 // Columns the app reads from `users`.
 const USER_COLUMNS = 'uid, full_name, profile_pic_data, is_active'
 
-// Event rows come with `organizer` ({ uid, full_name, is_active }) and
-// `category` ({ category_id, name }, or null) attached.
-const EVENT_COLUMNS = '*, organizer:users(uid, full_name, is_active), category:event_categories(category_id, name)'
+// Event rows come with `organizer` ({ uid, full_name, is_active }),
+// `category` ({ category_id, name }, or null), and `joined` ([{ count }], how
+// many people joined; read it with joinedCount() from src/utils/capacity.js).
+const EVENT_COLUMNS =
+  '*, organizer:users(uid, full_name, is_active), category:event_categories(category_id, name), joined:joined_events(count)'
 
 // Comment rows come with `sender` ({ uid, full_name, is_active }) attached.
 const COMMENT_COLUMNS = '*, sender:users(uid, full_name, is_active)'
@@ -35,11 +40,12 @@ const COMMENT_COLUMNS = '*, sender:users(uid, full_name, is_active)'
 // each fetch small however long the chat gets.
 const MESSAGE_FETCH_LIMIT = 200
 
-// Notification rows come with `actor` (who did it: { uid, full_name, is_active })
-// and `event` ({ event_id, event_title }) attached. The foreign key is named
-// because notifications has two links to `users`.
+// Notification rows come with `actor` (who did it: { uid, full_name, is_active },
+// null for reminders) and `event` ({ event_id, event_title, start_time }, null
+// once the event is deleted) attached. The foreign key is named because
+// notifications has two links to `users`.
 const NOTIFICATION_COLUMNS =
-  '*, actor:users!notifications_actor_uid_fkey(uid, full_name, is_active), event:events(event_id, event_title)'
+  '*, actor:users!notifications_actor_uid_fkey(uid, full_name, is_active), event:events(event_id, event_title, start_time)'
 const NOTIFICATION_FETCH_LIMIT = 30
 
 function check(condition, message) {
@@ -61,7 +67,7 @@ function unwrap({ data, error }) {
 
 // ---------- validation ----------
 
-export function validateEvent({ title, description, location, startTime, endTime, pictureData }) {
+export function validateEvent({ title, description, location, startTime, endTime, pictureData, maxParticipants }) {
   check(typeof title === 'string' && title.trim().length > 0, 'Title is required.')
   check(title.trim().length <= TITLE_MAX, `Title must be ${TITLE_MAX} characters or less.`)
   check(!description || description.trim().length <= DESCRIPTION_MAX, `Description must be ${DESCRIPTION_MAX} characters or less.`)
@@ -72,6 +78,11 @@ export function validateEvent({ title, description, location, startTime, endTime
     check(endTime >= startTime, 'End time can’t be before the start time.')
   }
   if (pictureData != null) validateImageDataUrl(pictureData)
+  // null = no limit
+  if (maxParticipants != null) {
+    check(Number.isInteger(maxParticipants), 'The headcount must be a whole number.')
+    check(maxParticipants >= CAPACITY_MIN, `The headcount must be at least ${CAPACITY_MIN}.`)
+  }
 }
 
 export function validateImageDataUrl(dataUrl) {
@@ -254,7 +265,7 @@ export async function listCategories() {
 // Same shape as EVENT_COLUMNS, but the inner join lets listings filter out
 // events whose organizer deleted their account.
 const ACTIVE_EVENT_COLUMNS =
-  '*, organizer:users!inner(uid, full_name, is_active), category:event_categories(category_id, name)'
+  '*, organizer:users!inner(uid, full_name, is_active), category:event_categories(category_id, name), joined:joined_events(count)'
 
 // Soonest first. Filters are optional: categoryId, and a [from, to] window on
 // start_time. Events by deleted accounts are left out (they still open by link).
@@ -276,8 +287,18 @@ export async function getEvent(eventId) {
   return unwrap(await supabase.from('events').select(EVENT_COLUMNS).eq('event_id', eventId).maybeSingle())
 }
 
-export async function createEvent({ title, description, location, startTime, endTime, organizerUid, categoryId, pictureData }) {
-  validateEvent({ title, description, location, startTime, endTime, pictureData })
+export async function createEvent({
+  title,
+  description,
+  location,
+  startTime,
+  endTime,
+  organizerUid,
+  categoryId,
+  pictureData,
+  maxParticipants = null,
+}) {
+  validateEvent({ title, description, location, startTime, endTime, pictureData, maxParticipants })
   check(organizerUid, 'Organizer is required.')
   const row = {
     event_id: crypto.randomUUID(),
@@ -290,8 +311,15 @@ export async function createEvent({ title, description, location, startTime, end
     organizer_uid: organizerUid,
     category_id: categoryId || null,
     picture_data: pictureData ?? null,
+    max_participants: maxParticipants,
   }
   return unwrap(await supabase.from('events').insert(row).select(EVENT_COLUMNS).single())
+}
+
+// The limit can't drop below the people already in. The database checks this
+// too (trg_check_capacity_not_below_joined in docs/main_schema.sql).
+export function capacityBelowJoinedMessage(joined) {
+  return `${joined} ${joined === 1 ? 'person has' : 'people have'} already joined, so the headcount can’t be lower than ${joined}.`
 }
 
 // Only the fields passed in `changes` are updated.
@@ -305,8 +333,11 @@ export async function updateEvent(eventId, changes) {
     startTime: changes.startTime ?? current.start_time,
     endTime: changes.endTime !== undefined ? changes.endTime : current.end_time,
     pictureData: changes.pictureData !== undefined ? changes.pictureData : current.picture_data,
+    maxParticipants: changes.maxParticipants !== undefined ? changes.maxParticipants : current.max_participants,
   }
   validateEvent(merged)
+  const joined = joinedCount(current)
+  check(merged.maxParticipants == null || merged.maxParticipants >= joined, capacityBelowJoinedMessage(joined))
   const row = {
     event_title: merged.title.trim(),
     event_description: merged.description?.trim() || null,
@@ -314,9 +345,16 @@ export async function updateEvent(eventId, changes) {
     start_time: merged.startTime,
     end_time: merged.endTime,
     picture_data: merged.pictureData,
+    max_participants: merged.maxParticipants,
   }
   if (changes.categoryId !== undefined) row.category_id = changes.categoryId || null
-  return unwrap(await supabase.from('events').update(row).eq('event_id', eventId).select(EVENT_COLUMNS).single())
+  const { data, error } = await supabase.from('events').update(row).eq('event_id', eventId).select(EVENT_COLUMNS).single()
+  // Someone joined between our check and the save.
+  if (error?.message === 'capacity_below_joined') {
+    throw new Error('More people joined just now, so that headcount is too low. Reload and try again.')
+  }
+  if (error) throw toError(error)
+  return data
 }
 
 // The event's comments and joins are removed by ON DELETE CASCADE.
@@ -349,10 +387,18 @@ export async function hasJoined(eventId, uid) {
   return rows.length > 0
 }
 
+// The database rejects the join with "event_full" once the event reaches its
+// headcount (trg_check_event_capacity in docs/main_schema.sql), so a stale
+// page can't overfill it.
 export async function joinEvent(eventId, uid) {
   const { error } = await supabase.from('joined_events').insert({ event_id: eventId, joiner_uid: uid })
   // 23505 = unique violation, i.e. already joined. Treat that as success.
-  if (error && error.code !== '23505') throw toError(error)
+  if (error?.code === '23505') return
+  if (error?.message === 'event_full') {
+    // `code` lets the page tell this apart from other failures.
+    throw Object.assign(new Error('Sorry, this event just filled up.'), { code: 'event_full' })
+  }
+  if (error) throw toError(error)
 }
 
 export async function leaveEvent(eventId, uid) {
@@ -592,11 +638,21 @@ export async function sendGroupMessage({ eventId, senderUid, content }) {
 }
 
 // ---------- notifications ----------
-// A database trigger creates these (see docs/main_schema.sql), so the app only
-// reads them and marks them as read.
+// The database creates these (see docs/main_schema.sql), so the app only reads
+// them and marks them as read:
+// - event_joined: someone joined your event (trigger on joined_events)
+// - event_updated: an event you joined changed time or place; `details` holds
+//   the new values (trigger on events)
+// - event_deleted: an event you joined was deleted; `event_id` is then null and
+//   `event_title` keeps the name (trigger on events)
+// - event_reminder: an event you joined starts within the hour, made by
+//   create_due_reminders() below
 
-// Newest first.
+// Newest first. Also creates any reminders that are due, since there's no
+// server to run them on a schedule: the bell polls this every few seconds.
 export async function listNotifications(uid) {
+  // Best effort: if it fails, the list still loads and the next poll retries.
+  await supabase.rpc('create_due_reminders')
   return unwrap(
     await supabase
       .from('notifications')
