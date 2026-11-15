@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react'
 import { logOut } from '../api.jsx'
 import { HOME_PATH, PROFILE_PATH, SCHEDULE_PATH, SETTINGS_PATH } from '../utils/routes.js'
+import { useDarkMode } from '../utils/theme.js'
 import { useDismiss } from '../utils/use_dismiss.js'
 import Avatar from './Avatar.jsx'
 import Logo from './Logo.jsx'
@@ -53,6 +54,23 @@ function MenuLink({ item, currentPage, onClick }) {
 
 const isProfilePage = (page) => PROFILE_ITEMS.some((item) => item.page === page)
 
+// ☀️/🌙 button next to the notifications bell (from `md` up). It shows the
+// theme it switches to. Below `md` the ☰ menu has the same switch.
+function ThemeButton() {
+  const [dark, toggle] = useDarkMode()
+  return (
+    <button
+      type="button"
+      onClick={toggle}
+      aria-label={dark ? 'Switch to light mode' : 'Switch to dark mode'}
+      title={dark ? 'Light mode' : 'Dark mode'}
+      className="hidden h-10 w-10 items-center justify-center rounded-xl border border-line bg-surface text-lg hover:bg-brand-50 md:flex"
+    >
+      <span aria-hidden="true">{dark ? '☀️' : '🌙'}</span>
+    </button>
+  )
+}
+
 // "Profile" button with the user's picture. Opens a list with "My profile" and
 // "Account settings".
 function ProfileMenu({ currentPage, profile }) {
@@ -90,6 +108,7 @@ function ProfileMenu({ currentPage, profile }) {
 function MobileMenu({ currentPage }) {
   const [open, setOpen] = useState(false)
   const [busy, handleLogOut] = useLogOut()
+  const [dark, toggleTheme] = useDarkMode()
   const ref = useRef(null)
   useDismiss(open, setOpen, ref)
 
@@ -109,6 +128,11 @@ function MobileMenu({ currentPage }) {
           {[...NAV_ITEMS, ...PROFILE_ITEMS].map((item) => (
             <MenuLink key={item.page} item={item} currentPage={currentPage} onClick={() => setOpen(false)} />
           ))}
+          {/* Stays open after switching so the change is visible right away. */}
+          <button type="button" onClick={toggleTheme} className={`${navLinkClass(false)} w-full`}>
+            <span aria-hidden="true">{dark ? '☀️' : '🌙'}</span>
+            {dark ? 'Light mode' : 'Dark mode'}
+          </button>
           <button
             type="button"
             onClick={handleLogOut}
@@ -136,6 +160,7 @@ export default function MenuBar({ currentPage, profile }) {
           <span className="text-xl font-extrabold tracking-tight text-ink">NUMeet</span>
         </a>
         <div className="flex items-center gap-2">
+          <ThemeButton />
           <NotificationsPopup profile={profile} />
           <MessagesPopup profile={profile} />
           <nav aria-label="Main" className="hidden items-center gap-1 md:flex">
