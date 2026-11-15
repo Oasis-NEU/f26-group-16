@@ -66,12 +66,16 @@ LANGUAGE plpgsql
 SECURITY DEFINER SET search_path = ''
 AS $$
 BEGIN
-  IF coalesce(trim(new.raw_user_meta_data->>'full_name'), '') = '' THEN
-    RAISE EXCEPTION 'full_name is required';
-  END IF;
-
+  -- Fall back to "user_" + the first 8 characters of the uid when no name is given
   INSERT INTO public.users (uid, full_name, is_active)
-  VALUES (new.id::text, trim(new.raw_user_meta_data->>'full_name'), true);
+  VALUES (
+    new.id::text,
+    coalesce(
+      nullif(trim(new.raw_user_meta_data->>'full_name'), ''),
+      'user_' || left(new.id::text, 8)
+    ),
+    true
+  );
   RETURN new;
 END;
 $$;
