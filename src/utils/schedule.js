@@ -2,6 +2,8 @@
 // rows (times are UNIX seconds), so they're easy to check without React.
 // Kept apart from format.js so schedule work doesn't touch shared files.
 
+import { isFull } from './capacity.js'
+
 // ---------- display ----------
 
 const timeFormat = new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' })
@@ -56,8 +58,8 @@ export function findConflicts(events) {
 }
 
 // Events that fit the user's open time: not joined, not their own, not started
-// yet, and not overlapping anything they joined. Categories the user joins most
-// come first, then the soonest.
+// yet, not full, and not overlapping anything they joined. Categories the user
+// joins most come first, then the soonest.
 export function suggestEvents({ candidates, joined, uid, now, limit = 6 }) {
   const joinedIds = new Set(joined.map((event) => event.event_id))
   const categoryCounts = {}
@@ -72,6 +74,7 @@ export function suggestEvents({ candidates, joined, uid, now, limit = 6 }) {
         !joinedIds.has(event.event_id) &&
         event.organizer_uid !== uid &&
         event.start_time > now &&
+        !isFull(event) &&
         !joined.some((mine) => overlaps(mine, event)),
     )
     .sort((a, b) => score(b) - score(a) || a.start_time - b.start_time)

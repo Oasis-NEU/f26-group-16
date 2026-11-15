@@ -113,6 +113,8 @@ CREATE TABLE events(
         picture_data LIKE 'data:image/webp;base64,%'
         AND octet_length(picture_data) <= 13981039
     ),
+    -- Headcount limit; NULL = no limit (see the capacity triggers under Joined events)
+    max_participants INTEGER CHECK (max_participants IS NULL OR max_participants >= 2),
     CONSTRAINT chk_event_times CHECK (end_time IS NULL OR end_time >= start_time)
 );
 
@@ -155,6 +157,50 @@ CREATE TABLE joined_events(
     joiner_uid TEXT NOT NULL REFERENCES users(uid) ON UPDATE CASCADE,
     CONSTRAINT uc_event_joiner UNIQUE (event_id, joiner_uid)
 );
+
+-- Reject joins once an event reaches max_participants. Locking the event row
+-- makes two people who join at the same moment take turns, so they can't both
+-- get the last spot. SECURITY DEFINER because joiners can't lock someone
+-- else's event under RLS.
+CREATE OR REPLACE FUNCTION public.check_event_capacity() RETURNS trigger
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = '' AS $$
+DECLARE
+    max_count INTEGER;
+BEGIN
+    SELECT max_participants INTO max_count FROM public.events
+    WHERE event_id = NEW.event_id FOR UPDATE;
+
+    -- Already joined: let the unique constraint handle it (the app treats that as success)
+    IF EXISTS (
+        SELECT 1 FROM public.joined_events
+        WHERE event_id = NEW.event_id AND joiner_uid = NEW.joiner_uid
+    ) THEN
+        RETURN NEW;
+    END IF;
+
+    IF max_count IS NOT NULL AND (
+        SELECT count(*) FROM public.joined_events WHERE event_id = NEW.event_id
+    ) >= max_count THEN
+        RAISE EXCEPTION 'event_full' USING ERRCODE = 'check_violation';
+    END IF;
+    RETURN NEW;
+END $$;
+CREATE OR REPLACE TRIGGER trg_check_event_capacity BEFORE INSERT ON joined_events
+    FOR EACH ROW EXECUTE FUNCTION public.check_event_capacity();
+
+-- Reject lowering max_participants below the people who already joined.
+CREATE OR REPLACE FUNCTION check_capacity_not_below_joined() RETURNS trigger
+LANGUAGE plpgsql SET search_path = public AS $$
+BEGIN
+    IF NEW.max_participants IS NOT NULL AND (
+        SELECT count(*) FROM joined_events WHERE event_id = NEW.event_id
+    ) > NEW.max_participants THEN
+        RAISE EXCEPTION 'capacity_below_joined' USING ERRCODE = 'check_violation';
+    END IF;
+    RETURN NEW;
+END $$;
+CREATE OR REPLACE TRIGGER trg_check_capacity_not_below_joined BEFORE UPDATE OF max_participants ON events
+    FOR EACH ROW EXECUTE FUNCTION check_capacity_not_below_joined();
 
 -- #region Chats list
 -- (create rows for each user)
