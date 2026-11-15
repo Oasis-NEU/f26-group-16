@@ -51,7 +51,7 @@ The platform is open to any campus event: study sessions, club meetings, open mi
 - "Direct message" button to contact the organizer
 - "👥 Group chat" button, shown only to the organizer and people who joined. It opens the event's group chat in the messages popup
 - "Who's going" list of people who joined, each with a message button to chat with them directly (not shown for yourself or deleted accounts)
-- If viewing as the event creator, a button that opens an "edit event" page allowing for modifications of these fields
+- If viewing as the event creator, an "Edit event" button takes the place of the "Join event" button (the creator can't join their own event; the joined count still shows). It opens the "edit event" page allowing for modifications of these fields
     - The form has an optional "How many people?" field (headcount limit, at least 2; empty = no limit). When editing, a limit below the people already joined shows a red warning and the form can't be saved
 
 ### Personal schedule page

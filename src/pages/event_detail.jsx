@@ -135,7 +135,7 @@ function GuestListDialog({ open, onClose, joiners, profile, onMessage, messageDi
 // with a button that opens the full list in a popup. Each person has a message
 // button; a new chat is named after this event.
 // Reloads whenever `refreshKey` changes (after joining or leaving).
-function JoinerList({ eventId, eventTitle, profile, refreshKey }) {
+function JoinerList({ eventId, eventTitle, profile, refreshKey, isOrganizer }) {
   const [state, setState] = useState(null)
   const [showAll, setShowAll] = useState(false)
   const { startChat, busy, error } = useStartChat(profile)
@@ -159,7 +159,8 @@ function JoinerList({ eventId, eventTitle, profile, refreshKey }) {
   let body
   if (!state) body = <p className="text-sm text-muted">Loading…</p>
   else if (state.error) body = <ErrorMessage message={state.error} />
-  else if (state.joiners.length === 0) body = <p className="text-sm text-muted">No one yet. Be the first!</p>
+  else if (state.joiners.length === 0)
+    body = <p className="text-sm text-muted">{isOrganizer ? 'No one has joined yet.' : 'No one yet. Be the first!'}</p>
   else {
     const { joiners } = state
     const hidden = joiners.length - JOINER_PREVIEW
@@ -216,7 +217,9 @@ function JoinerList({ eventId, eventTitle, profile, refreshKey }) {
 
 // `max` is the headcount limit (null = no limit). Once it's reached, people who
 // haven't joined see a disabled "Full" button; people already in can still leave.
-function JoinButton({ eventId, profile, initialCount, initialJoined, max, onChange }) {
+// Organizers can't join their own event: with `editHref` set, the Edit event
+// button takes the Join button's place.
+function JoinButton({ eventId, profile, initialCount, initialJoined, max, editHref, onChange }) {
   const [joined, setJoined] = useState(initialJoined)
   const [count, setCount] = useState(initialCount)
   const [busy, setBusy] = useState(false)
@@ -264,15 +267,21 @@ function JoinButton({ eventId, profile, initialCount, initialJoined, max, onChan
         )}
         {joined && <span className="font-semibold text-brand-600"> · including you</span>}
       </p>
-      <button
-        type="button"
-        onClick={toggle}
-        disabled={busy || (full && !joined)}
-        aria-pressed={joined}
-        className={`${joined ? secondaryButton : primaryButton} w-full`}
-      >
-        {joined ? 'Leave event' : full ? 'Full' : 'Join event'}
-      </button>
+      {editHref ? (
+        <a href={editHref} className={`${secondaryButton} w-full`}>
+          <span aria-hidden="true">✏️</span> Edit event
+        </a>
+      ) : (
+        <button
+          type="button"
+          onClick={toggle}
+          disabled={busy || (full && !joined)}
+          aria-pressed={joined}
+          className={`${joined ? secondaryButton : primaryButton} w-full`}
+        >
+          {joined ? 'Leave event' : full ? 'Full' : 'Join event'}
+        </button>
+      )}
       <ErrorMessage message={error} />
     </div>
   )
@@ -556,9 +565,16 @@ export default function EventDetail({ eventId, profile }) {
             initialCount={joinedCount(event)}
             initialJoined={result.joined}
             max={event.max_participants}
+            editHref={isOrganizer ? editEventPath(event.event_id) : null}
             onChange={() => setJoinChanges((n) => n + 1)}
           />
-          <JoinerList eventId={event.event_id} eventTitle={event.event_title} profile={profile} refreshKey={joinChanges} />
+          <JoinerList
+            eventId={event.event_id}
+            eventTitle={event.event_title}
+            profile={profile}
+            refreshKey={joinChanges}
+            isOrganizer={isOrganizer}
+          />
           <GroupChatButton eventId={event.event_id} profile={profile} isOrganizer={isOrganizer} refreshKey={joinChanges} />
           {!isOrganizer && (
             <div className="space-y-2">
@@ -572,11 +588,6 @@ export default function EventDetail({ eventId, profile }) {
               </button>
               <ErrorMessage message={dmError} />
             </div>
-          )}
-          {isOrganizer && (
-            <a href={editEventPath(event.event_id)} className={`${secondaryButton} w-full`}>
-              <span aria-hidden="true">✏️</span> Edit event
-            </a>
           )}
         </aside>
 
