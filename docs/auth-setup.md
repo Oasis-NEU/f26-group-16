@@ -17,19 +17,24 @@ Authentication → Sign In / Providers → **Email**:
 
 ```sql
 -- Create the `users` row automatically when someone signs up.
--- uid is the Supabase Auth user id; full_name comes from the sign-up form.
+-- uid is the Supabase Auth user id; full_name comes from the sign-up form
+-- (or "user_" + the first 8 characters of the uid if it is missing).
 CREATE OR REPLACE FUNCTION public.handle_new_user()
 RETURNS trigger
 LANGUAGE plpgsql
 SECURITY DEFINER SET search_path = ''
 AS $$
 BEGIN
-  IF coalesce(trim(new.raw_user_meta_data->>'full_name'), '') = '' THEN
-    RAISE EXCEPTION 'full_name is required';
-  END IF;
-
+  -- Fall back to "user_" + the first 8 characters of the uid when no name is given
   INSERT INTO public.users (uid, full_name, is_active)
-  VALUES (new.id::text, trim(new.raw_user_meta_data->>'full_name'), true);
+  VALUES (
+    new.id::text,
+    coalesce(
+      nullif(trim(new.raw_user_meta_data->>'full_name'), ''),
+      'user_' || left(new.id::text, 8)
+    ),
+    true
+  );
   RETURN new;
 END;
 $$;
