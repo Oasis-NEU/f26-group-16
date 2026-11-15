@@ -7,6 +7,7 @@ DROP TABLE IF EXISTS event_comments CASCADE;
 DROP TABLE IF EXISTS joined_events CASCADE;
 DROP TABLE IF EXISTS chat_msgs CASCADE;
 DROP TABLE IF EXISTS chats_list CASCADE;
+DROP TABLE IF EXISTS event_chat_msgs CASCADE;
 DROP TABLE IF EXISTS notifications CASCADE;
 -- DELETE FROM auth.users;  -- wipes all logins; the signup trigger recreates users rows
 
@@ -174,6 +175,39 @@ CREATE TABLE chat_msgs(
     msg_time BIGINT NOT NULL DEFAULT extract(epoch FROM now())::bigint,
     sender_uid TEXT NOT NULL REFERENCES users(uid) ON UPDATE CASCADE
 );
+
+-- #region Event group chats
+-- One group chat per event. Members are the organizer plus everyone in
+-- joined_events, so joining or leaving the event changes membership with no
+-- extra table. Direct chats (chats_list / chat_msgs) are separate.
+CREATE TABLE event_chat_msgs(
+    msg_id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+    event_id TEXT NOT NULL REFERENCES events(event_id) ON DELETE CASCADE,
+    sender_uid TEXT NOT NULL REFERENCES users(uid) ON UPDATE CASCADE,
+    msg_content TEXT NOT NULL CHECK (char_length(btrim(msg_content)) BETWEEN 1 AND 2000),
+    msg_time BIGINT NOT NULL DEFAULT extract(epoch FROM now())::bigint
+);
+CREATE INDEX idx_event_chat_msgs_event ON event_chat_msgs(event_id, msg_time);
+
+-- True if the logged-in user organizes or joined the event.
+CREATE OR REPLACE FUNCTION is_event_member(target_event TEXT) RETURNS boolean
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
+    SELECT EXISTS (
+        SELECT 1 FROM events
+        WHERE event_id = target_event AND organizer_uid = (SELECT auth.uid())::text
+    ) OR EXISTS (
+        SELECT 1 FROM joined_events
+        WHERE event_id = target_event AND joiner_uid = (SELECT auth.uid())::text
+    );
+$$;
+
+-- Only members read and send, only as themselves. No update or delete policy,
+-- so sent messages can't be changed.
+ALTER TABLE event_chat_msgs ENABLE ROW LEVEL SECURITY;
+CREATE POLICY event_msgs_read ON event_chat_msgs FOR SELECT TO authenticated
+    USING (is_event_member(event_id));
+CREATE POLICY event_msgs_insert ON event_chat_msgs FOR INSERT TO authenticated
+    WITH CHECK (sender_uid = (SELECT auth.uid())::text AND is_event_member(event_id));
 
 -- #region Notifications
 CREATE TABLE notifications(

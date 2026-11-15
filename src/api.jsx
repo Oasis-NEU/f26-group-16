@@ -511,6 +511,86 @@ export async function findOrCreateChat({ uid, otherUid, chatName }) {
   return chatId
 }
 
+// ---------- event group chats ----------
+// Every event has one group chat. Its members are the organizer plus everyone
+// in joined_events, so joining adds you and leaving removes you, with no
+// membership table to keep in sync. Messages live in event_chat_msgs, and RLS
+// (is_event_member in docs/main_schema.sql) lets only members read or send.
+// Direct chats (chats_list / chat_msgs) are separate and unchanged.
+
+// Group messages come with `sender` attached, since a group has many senders.
+const GROUP_MESSAGE_COLUMNS = 'msg_id, msg_content, msg_time, sender_uid, sender:users(uid, full_name, is_active)'
+
+// Events the user organizes or joined, as { event_id, event_title }.
+async function memberEvents(uid) {
+  const [organized, joined] = await Promise.all([
+    supabase.from('events').select('event_id, event_title').eq('organizer_uid', uid),
+    supabase.from('joined_events').select('event:events(event_id, event_title)').eq('joiner_uid', uid),
+  ])
+  const byId = new Map()
+  for (const event of unwrap(organized)) byId.set(event.event_id, event)
+  for (const row of unwrap(joined)) if (row.event) byId.set(row.event.event_id, row.event)
+  return [...byId.values()]
+}
+
+// The user's group chats that have messages, as { event_id, event_title,
+// latest } (`latest` is the newest message with `sender`), most recently
+// active first. Like direct chats, empty ones are left out of the list.
+export async function listGroupChats(uid) {
+  const events = await memberEvents(uid)
+  const latest = await Promise.all(
+    events.map(async (event) => {
+      const rows = unwrap(
+        await supabase
+          .from('event_chat_msgs')
+          .select(GROUP_MESSAGE_COLUMNS)
+          .eq('event_id', event.event_id)
+          .order('msg_time', { ascending: false })
+          .order('msg_id', { ascending: false })
+          .limit(1),
+      )
+      return rows[0] ?? null
+    }),
+  )
+  return events
+    .map((event, i) => ({ ...event, latest: latest[i] }))
+    .filter((chat) => chat.latest)
+    .sort((a, b) => b.latest.msg_time - a.latest.msg_time)
+}
+
+// The event behind a group chat ({ event_id, event_title, organizer_uid }), or
+// null if it's gone or the user isn't a member.
+export async function getGroupChat(eventId, uid) {
+  const event = unwrap(
+    await supabase.from('events').select('event_id, event_title, organizer_uid').eq('event_id', eventId).maybeSingle(),
+  )
+  if (!event) return null
+  if (event.organizer_uid === uid || (await hasJoined(eventId, uid))) return event
+  return null
+}
+
+// Oldest first, newest 200, each with `sender`.
+export async function listGroupMessages(eventId) {
+  const rows = unwrap(
+    await supabase
+      .from('event_chat_msgs')
+      .select(GROUP_MESSAGE_COLUMNS)
+      .eq('event_id', eventId)
+      .order('msg_time', { ascending: false })
+      .order('msg_id', { ascending: false })
+      .limit(MESSAGE_FETCH_LIMIT),
+  )
+  return rows.reverse()
+}
+
+export async function sendGroupMessage({ eventId, senderUid, content }) {
+  const text = content?.trim() ?? ''
+  check(text, 'Write something first.')
+  check(text.length <= MESSAGE_MAX, `Messages must be ${MESSAGE_MAX} characters or less.`)
+  check(senderUid, 'Sender is required.')
+  unwrap(await supabase.from('event_chat_msgs').insert({ event_id: eventId, msg_content: text, sender_uid: senderUid }))
+}
+
 // ---------- notifications ----------
 // A database trigger creates these (see docs/main_schema.sql), so the app only
 // reads them and marks them as read.

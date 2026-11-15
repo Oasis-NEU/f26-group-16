@@ -46,6 +46,7 @@ The platform is open to any campus event: study sessions, club meetings, open mi
 - "Join event" button with a display of how many people already joined/subscribed
 - Comments with replies
 - "Direct message" button to contact the organizer
+- "👥 Group chat" button, shown only to the organizer and people who joined. It opens the event's group chat in the messages popup
 - "Who's going" list of people who joined, each with a message button to chat with them directly (not shown for yourself or deleted accounts)
 - If viewing as the event creator, a button that opens an "edit event" page allowing for modifications of these fields
 
@@ -95,6 +96,8 @@ The platform is open to any campus event: study sessions, club meetings, open mi
 - Chats with no messages don't appear in the list, for either person. Opening a chat doesn't notify the other person; they see it once a message is sent
 - Two users share one chat. A new chat is named after the event it started from, and later messages about other events go in the same chat
 - Deleted accounts show as "Deleted account"; their chats stay readable, but the text field is replaced by a note that you can't reply
+- Event group chats: every event has one group chat. Members are the organizer plus everyone who joined, so joining adds you and leaving removes you right away (you then can't read it). They show in the same list, named after the event with 👥 and "Group chat" under it; like direct chats, only ones with messages appear. In a group chat, other people's messages show the sender's name above them, and the header title links to the event. The list and chats poll every 2 seconds like direct chats
+- The popup is titled "Messages" since it holds both kinds. Its open chat is a key: a direct chat's `chat_id`, or `event:<event_id>` for a group (`groupChatKey()` / `groupChatEventId()` in `src/utils/chat_events.js`; open one from any page with `openGroupChat(eventId)`)
 
 ### Notification inbox
 
@@ -147,6 +150,9 @@ The platform is open to any campus event: study sessions, club meetings, open mi
     - Create table for chat messages (message ID, message content, date, sender) labeled with its belonging chat ID
         - Fetch chat list: Query chats based on UID → Query participant UIDs based on chat ID
     - Use another table for lists of chats (chat ID, UID, user-defined name/label); separate entries for each user
+- Table for event group chat messages (`event_chat_msgs`)
+    - Message ID, event ID, sender UID, content (1–2000 chars), date. Deleted with the event
+    - No membership table: members are the organizer plus `joined_events`. The `is_event_member(event_id)` function backs RLS, so only members can read, and they can only send as themselves. Messages can't be edited or deleted
 - Table for notifications
     - Notification ID, recipient UID, actor UID (who did it), event ID, type, date, read flag
     - Rows are only created by the `on_event_joined` database trigger. Users can read their own and change only `is_read`
@@ -232,6 +238,10 @@ Direct message functions in `src/api.jsx`:
 | `getChat(chatId, uid)` | One of the user's chats with `other` attached, or `null` if they aren't in it |
 | `listMessages(chatId)` | A chat's newest 200 messages, oldest first |
 | `sendMessage({ chatId, senderUid, content })` | Validates (1–2000 characters), then sends a message |
+| `listGroupChats(uid)` | Group chats of events the user organizes or joined that have messages, as `{ event_id, event_title, latest }` (`latest` has `sender`), most recently active first |
+| `getGroupChat(eventId, uid)` | The event (`{ event_id, event_title, organizer_uid }`) if the user is a member, else `null` |
+| `listGroupMessages(eventId)` | A group chat's newest 200 messages with `sender`, oldest first |
+| `sendGroupMessage({ eventId, senderUid, content })` | Validates (1–2000 characters), then sends to the group |
 | `findOrCreateChat({ uid, otherUid, chatName })` | Returns the id of the two users' chat, creating it if needed. Adds your own `chats_list` row first, because RLS only lets chat members add other participants |
 
 ## Stack
@@ -278,7 +288,7 @@ src/
     EventPopover.jsx        # hover/focus details popup for schedule calendar blocks
     Logo.jsx                # SVG Husky logo that barks on hover
     menu_bar.jsx            # Top menu bar
-    messages_popup.jsx      # Messages button + popup: chat list, open chat, 2-second polling
+    messages_popup.jsx      # Messages button + popup: direct and group chat list, open chat, 2-second polling
     notifications_popup.jsx # Bell button + unread badge + notification list
     toaster.jsx             # Shows showToast() confirmations at the bottom of the screen
     ui.jsx                  # shared button/input styles, ErrorMessage, Notice
@@ -286,7 +296,7 @@ src/
     supabase.js             # Supabase client (only api.jsx imports it)
     routes.js               # hash routes: path builders, useRoute(), navigate()
     format.js               # dates, "Deleted account" names, category glyphs
-    chat_events.js          # openChat(chatId): opens the messages popup from any page
+    chat_events.js          # openChat(key) / openGroupChat(eventId): opens the messages popup from any page
     use_dismiss.js          # useDismiss(): closes a popup on Escape or an outside click
     use_polling.js          # usePolling(): re-fetches data on a timer, keeps it through failures
     toast.js                # showToast(message): confirms an action from any page
