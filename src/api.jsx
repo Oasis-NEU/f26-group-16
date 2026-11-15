@@ -446,12 +446,22 @@ export async function addComment({ eventId, senderUid, content, replyingTo = nul
   return unwrap(await supabase.from('event_comments').insert(row).select(COMMENT_COLUMNS).single())
 }
 
-// ---------- direct messages ----------
-// A chat has one chats_list row per participant, sharing a chat_id. Each row
-// holds that user's own name for the chat.
+// ---------- chats (direct and event group) ----------
+// A chat has one chats_list row per participant, sharing a chat_id, and its
+// messages are in chat_msgs.
+// - Direct chats: two people, `event_id` null. Each row holds that user's own
+//   name for the chat.
+// - Event group chats: `event_id` set and chat_id "event:<event_id>"
+//   (groupChatId in src/utils/chat_events.js). Database triggers add the
+//   organizer and everyone who joins, and remove people who leave, so the app
+//   never writes these rows. See docs/main_schema.sql.
 
-// The other participant's `users` row for each of the given chats, by chat id.
+// Messages come with `sender` attached, for names in group chats.
+const MESSAGE_COLUMNS = 'msg_id, msg_content, msg_time, sender_uid, sender:users(uid, full_name, is_active)'
+
+// The other participant's `users` row for each of the given direct chats, by chat id.
 async function otherParticipants(chatIds, uid) {
+  if (chatIds.length === 0) return new Map()
   const rows = unwrap(
     await supabase
       .from('chats_list')
@@ -462,23 +472,24 @@ async function otherParticipants(chatIds, uid) {
   return new Map(rows.map((row) => [row.chat_id, row.user]))
 }
 
-// The user's chats with the other participant (`other`) and newest message
-// (`latest`) attached, most recently active first. Chats with no messages are
-// left out, so opening a chat doesn't show up for the other person until
+// The user's chats with the newest message (`latest`, with `sender`) attached,
+// most recently active first. Direct chats also get the other participant
+// (`other`); group chats have `event_id` set instead. Chats with no messages
+// are left out, so opening a chat doesn't show up for the other person until
 // something is sent. Opening it again finds the same chat.
 export async function listChats(uid) {
-  const chats = unwrap(await supabase.from('chats_list').select('chat_id, chat_name').eq('user_id', uid))
+  const chats = unwrap(await supabase.from('chats_list').select('chat_id, chat_name, event_id').eq('user_id', uid))
   if (chats.length === 0) return []
-  const chatIds = chats.map((chat) => chat.chat_id)
+  const directIds = chats.filter((chat) => !chat.event_id).map((chat) => chat.chat_id)
   const [others, latest] = await Promise.all([
-    otherParticipants(chatIds, uid),
+    otherParticipants(directIds, uid),
     Promise.all(
-      chatIds.map(async (chatId) => {
+      chats.map(async (chat) => {
         const rows = unwrap(
           await supabase
             .from('chat_msgs')
-            .select('msg_content, msg_time, sender_uid')
-            .eq('chat_id', chatId)
+            .select(MESSAGE_COLUMNS)
+            .eq('chat_id', chat.chat_id)
             .order('msg_time', { ascending: false })
             .order('msg_id', { ascending: false })
             .limit(1),
@@ -493,22 +504,29 @@ export async function listChats(uid) {
     .sort((a, b) => b.latest.msg_time - a.latest.msg_time)
 }
 
-// One of the user's chats with `other` attached, or null if they aren't in it.
+// One of the user's chats (direct chats with `other` attached), or null if
+// they aren't in it. Leaving an event removes you from its group chat.
 export async function getChat(chatId, uid) {
   const chat = unwrap(
-    await supabase.from('chats_list').select('chat_id, chat_name').eq('chat_id', chatId).eq('user_id', uid).maybeSingle(),
+    await supabase
+      .from('chats_list')
+      .select('chat_id, chat_name, event_id')
+      .eq('chat_id', chatId)
+      .eq('user_id', uid)
+      .maybeSingle(),
   )
   if (!chat) return null
+  if (chat.event_id) return { ...chat, other: null }
   const others = await otherParticipants([chatId], uid)
   return { ...chat, other: others.get(chatId) ?? null }
 }
 
-// Oldest first.
+// Oldest first, newest 200, each with `sender`.
 export async function listMessages(chatId) {
   const rows = unwrap(
     await supabase
       .from('chat_msgs')
-      .select('msg_id, msg_content, msg_time, sender_uid')
+      .select(MESSAGE_COLUMNS)
       .eq('chat_id', chatId)
       .order('msg_time', { ascending: false })
       .order('msg_id', { ascending: false })
@@ -517,6 +535,7 @@ export async function listMessages(chatId) {
   return rows.reverse()
 }
 
+// Works for direct and group chats: RLS only lets chat members send.
 export async function sendMessage({ chatId, senderUid, content }) {
   const text = content?.trim() ?? ''
   check(text, 'Write something first.')
@@ -525,18 +544,21 @@ export async function sendMessage({ chatId, senderUid, content }) {
   unwrap(await supabase.from('chat_msgs').insert({ chat_id: chatId, msg_content: text, sender_uid: senderUid }))
 }
 
-// Returns the id of the chat between the two users, creating it if needed.
-// `chatName` names a new chat for both of them.
+// Returns the id of the direct chat between the two users, creating it if
+// needed. `chatName` names a new chat for both of them. Only direct chats
+// count (`event_id` null): two people in the same event group chat still get
+// their own direct chat.
 export async function findOrCreateChat({ uid, otherUid, chatName }) {
   check(uid && otherUid, 'Both participants are required.')
   check(uid !== otherUid, 'You can’t message yourself.')
-  const mine = unwrap(await supabase.from('chats_list').select('chat_id').eq('user_id', uid))
+  const mine = unwrap(await supabase.from('chats_list').select('chat_id').eq('user_id', uid).is('event_id', null))
   if (mine.length > 0) {
     const shared = unwrap(
       await supabase
         .from('chats_list')
         .select('chat_id')
         .eq('user_id', otherUid)
+        .is('event_id', null)
         .in('chat_id', mine.map((chat) => chat.chat_id))
         .limit(1),
     )
@@ -555,86 +577,6 @@ export async function findOrCreateChat({ uid, otherUid, chatName }) {
     throw toError(error)
   }
   return chatId
-}
-
-// ---------- event group chats ----------
-// Every event has one group chat. Its members are the organizer plus everyone
-// in joined_events, so joining adds you and leaving removes you, with no
-// membership table to keep in sync. Messages live in event_chat_msgs, and RLS
-// (is_event_member in docs/main_schema.sql) lets only members read or send.
-// Direct chats (chats_list / chat_msgs) are separate and unchanged.
-
-// Group messages come with `sender` attached, since a group has many senders.
-const GROUP_MESSAGE_COLUMNS = 'msg_id, msg_content, msg_time, sender_uid, sender:users(uid, full_name, is_active)'
-
-// Events the user organizes or joined, as { event_id, event_title }.
-async function memberEvents(uid) {
-  const [organized, joined] = await Promise.all([
-    supabase.from('events').select('event_id, event_title').eq('organizer_uid', uid),
-    supabase.from('joined_events').select('event:events(event_id, event_title)').eq('joiner_uid', uid),
-  ])
-  const byId = new Map()
-  for (const event of unwrap(organized)) byId.set(event.event_id, event)
-  for (const row of unwrap(joined)) if (row.event) byId.set(row.event.event_id, row.event)
-  return [...byId.values()]
-}
-
-// The user's group chats that have messages, as { event_id, event_title,
-// latest } (`latest` is the newest message with `sender`), most recently
-// active first. Like direct chats, empty ones are left out of the list.
-export async function listGroupChats(uid) {
-  const events = await memberEvents(uid)
-  const latest = await Promise.all(
-    events.map(async (event) => {
-      const rows = unwrap(
-        await supabase
-          .from('event_chat_msgs')
-          .select(GROUP_MESSAGE_COLUMNS)
-          .eq('event_id', event.event_id)
-          .order('msg_time', { ascending: false })
-          .order('msg_id', { ascending: false })
-          .limit(1),
-      )
-      return rows[0] ?? null
-    }),
-  )
-  return events
-    .map((event, i) => ({ ...event, latest: latest[i] }))
-    .filter((chat) => chat.latest)
-    .sort((a, b) => b.latest.msg_time - a.latest.msg_time)
-}
-
-// The event behind a group chat ({ event_id, event_title, organizer_uid }), or
-// null if it's gone or the user isn't a member.
-export async function getGroupChat(eventId, uid) {
-  const event = unwrap(
-    await supabase.from('events').select('event_id, event_title, organizer_uid').eq('event_id', eventId).maybeSingle(),
-  )
-  if (!event) return null
-  if (event.organizer_uid === uid || (await hasJoined(eventId, uid))) return event
-  return null
-}
-
-// Oldest first, newest 200, each with `sender`.
-export async function listGroupMessages(eventId) {
-  const rows = unwrap(
-    await supabase
-      .from('event_chat_msgs')
-      .select(GROUP_MESSAGE_COLUMNS)
-      .eq('event_id', eventId)
-      .order('msg_time', { ascending: false })
-      .order('msg_id', { ascending: false })
-      .limit(MESSAGE_FETCH_LIMIT),
-  )
-  return rows.reverse()
-}
-
-export async function sendGroupMessage({ eventId, senderUid, content }) {
-  const text = content?.trim() ?? ''
-  check(text, 'Write something first.')
-  check(text.length <= MESSAGE_MAX, `Messages must be ${MESSAGE_MAX} characters or less.`)
-  check(senderUid, 'Sender is required.')
-  unwrap(await supabase.from('event_chat_msgs').insert({ event_id: eventId, msg_content: text, sender_uid: senderUid }))
 }
 
 // ---------- notifications ----------

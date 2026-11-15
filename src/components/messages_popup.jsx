@@ -1,16 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
-import {
-  MESSAGE_MAX,
-  getChat,
-  getGroupChat,
-  listChats,
-  listGroupChats,
-  listGroupMessages,
-  listMessages,
-  sendGroupMessage,
-  sendMessage,
-} from '../api.jsx'
-import { OPEN_CHAT_EVENT, groupChatEventId, groupChatKey } from '../utils/chat_events.js'
+import { MESSAGE_MAX, getChat, listChats, listMessages, sendMessage } from '../api.jsx'
+import { OPEN_CHAT_EVENT } from '../utils/chat_events.js'
 import { displayName, formatTimestamp } from '../utils/format.js'
 import { eventPath } from '../utils/routes.js'
 import { useDismiss } from '../utils/use_dismiss.js'
@@ -20,24 +10,15 @@ import UserName from './UserName.jsx'
 
 const POLL_MS = 2000
 
-// Direct chats and event group chats in one list, newest activity first. Each
-// item has a `key`: the chat_id, or groupChatKey(eventId) for a group.
-async function loadAllChats(uid) {
-  const [direct, groups] = await Promise.all([listChats(uid), listGroupChats(uid)])
-  return [
-    ...direct.map((chat) => ({ key: chat.chat_id, name: chat.chat_name, subtitle: displayName(chat.other), latest: chat.latest })),
-    ...groups.map((group) => ({ key: groupChatKey(group.event_id), name: group.event_title, group: true, latest: group.latest })),
-  ].sort((a, b) => b.latest.msg_time - a.latest.msg_time)
-}
-
+// Direct chats and event group chats (`event_id` set) come in one list.
 function ChatList({ profile, onSelect }) {
-  const load = useCallback(() => loadAllChats(profile.uid), [profile.uid])
+  const load = useCallback(() => listChats(profile.uid), [profile.uid])
   const { data: chats, failed } = usePolling(load, POLL_MS)
 
   // "You: …" for your own message; in a group, the sender's name.
   const senderPrefix = (chat) => {
     if (chat.latest.sender_uid === profile.uid) return 'You: '
-    return chat.group ? `${displayName(chat.latest.sender)}: ` : ''
+    return chat.event_id ? `${displayName(chat.latest.sender)}: ` : ''
   }
 
   return (
@@ -52,16 +33,16 @@ function ChatList({ profile, onSelect }) {
         {chats?.length > 0 && (
           <ul className="divide-y divide-line">
             {chats.map((chat) => (
-              <li key={chat.key}>
-                <button type="button" onClick={() => onSelect(chat.key)} className="w-full px-5 py-3 text-left hover:bg-brand-50">
+              <li key={chat.chat_id}>
+                <button type="button" onClick={() => onSelect(chat.chat_id)} className="w-full px-5 py-3 text-left hover:bg-brand-50">
                   <span className="flex items-baseline justify-between gap-3">
                     <span className="truncate font-semibold text-ink">
-                      {chat.group && <span aria-hidden="true">👥 </span>}
-                      {chat.name}
+                      {chat.event_id && <span aria-hidden="true">👥 </span>}
+                      {chat.chat_name}
                     </span>
                     <span className="shrink-0 text-xs text-muted">{formatTimestamp(chat.latest.msg_time)}</span>
                   </span>
-                  <span className="block truncate text-xs text-muted">{chat.group ? 'Group chat' : chat.subtitle}</span>
+                  <span className="block truncate text-xs text-muted">{chat.event_id ? 'Group chat' : displayName(chat.other)}</span>
                   <span className="mt-0.5 block truncate text-sm text-muted">
                     {senderPrefix(chat)}
                     {chat.latest.msg_content}
@@ -117,8 +98,7 @@ function MessageList({ messages, uid, showSenders = false }) {
   )
 }
 
-// `send(text)` sends the message to whichever chat this form belongs to.
-function MessageForm({ send, onSent }) {
+function MessageForm({ chatId, uid, onSent }) {
   const [text, setText] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -129,7 +109,7 @@ function MessageForm({ send, onSent }) {
     setBusy(true)
     setError('')
     try {
-      await send(text)
+      await sendMessage({ chatId, senderUid: uid, content: text })
       setText('')
       onSent()
     } catch (err) {
@@ -164,7 +144,10 @@ function MessageForm({ send, onSent }) {
   )
 }
 
-// `onLeave` closes the popup when the name link opens the other person's profile.
+// One chat. A direct chat shows the other person (`onLeave` closes the popup
+// when their name opens their profile). A group chat links its title to the
+// event and shows who sent each message; leaving the event removes you, so the
+// chat then shows a note instead.
 function ChatView({ chatId, uid, onBack, onLeave }) {
   const load = useCallback(async () => {
     const [chat, messages] = await Promise.all([getChat(chatId, uid), listMessages(chatId)])
@@ -172,6 +155,7 @@ function ChatView({ chatId, uid, onBack, onLeave }) {
   }, [chatId, uid])
   const { data, failed, refresh } = usePolling(load, POLL_MS)
   const chat = data?.chat
+  const isGroup = Boolean(chat?.event_id)
 
   return (
     <>
@@ -186,66 +170,37 @@ function ChatView({ chatId, uid, onBack, onLeave }) {
         </button>
         {chat && (
           <div className="min-w-0">
-            <h2 className="truncate font-bold text-ink">{chat.chat_name}</h2>
-            <p className="truncate text-xs">
-              <UserName user={chat.other} onClick={onLeave} />
-            </p>
+            {isGroup ? (
+              <>
+                <h2 className="truncate font-bold text-ink">
+                  <a href={eventPath(chat.event_id)} onClick={onLeave} className="hover:underline">
+                    <span aria-hidden="true">👥 </span>
+                    {chat.chat_name}
+                  </a>
+                </h2>
+                <p className="truncate text-xs text-muted">Group chat · everyone who joined</p>
+              </>
+            ) : (
+              <>
+                <h2 className="truncate font-bold text-ink">{chat.chat_name}</h2>
+                <p className="truncate text-xs">
+                  <UserName user={chat.other} onClick={onLeave} />
+                </p>
+              </>
+            )}
           </div>
         )}
       </div>
       <ConnectionBanner show={failed} />
       {!data && <div className="flex-1">{!failed && <PopupNote>Loading…</PopupNote>}</div>}
-      {data && !chat && <PopupNote>This chat isn’t available.</PopupNote>}
-      {chat && <MessageList messages={data.messages} uid={uid} />}
+      {data && !chat && <PopupNote>This chat isn’t available. Group chats are only for the organizer and people who joined.</PopupNote>}
+      {chat && <MessageList messages={data.messages} uid={uid} showSenders={isGroup} />}
       {chat &&
-        (chat.other?.is_active ? (
-          <MessageForm send={(content) => sendMessage({ chatId, senderUid: uid, content })} onSent={refresh} />
+        (isGroup || chat.other?.is_active ? (
+          <MessageForm chatId={chatId} uid={uid} onSent={refresh} />
         ) : (
           <p className="border-t border-line px-4 py-3 text-center text-sm text-muted">You can’t reply to a deleted account.</p>
         ))}
-    </>
-  )
-}
-
-// An event's group chat: the organizer and everyone who joined. The title
-// links to the event. Leaving the event takes you out, so the chat then shows
-// a note instead.
-function GroupChatView({ eventId, uid, onBack, onLeave }) {
-  const load = useCallback(async () => {
-    const chat = await getGroupChat(eventId, uid)
-    return { chat, messages: chat ? await listGroupMessages(eventId) : [] }
-  }, [eventId, uid])
-  const { data, failed, refresh } = usePolling(load, POLL_MS)
-  const chat = data?.chat
-
-  return (
-    <>
-      <div className="flex items-center gap-2 border-b border-line px-3 py-3">
-        <button
-          type="button"
-          onClick={onBack}
-          aria-label="Back to chats"
-          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-ink hover:bg-brand-50"
-        >
-          <span aria-hidden="true">←</span>
-        </button>
-        {chat && (
-          <div className="min-w-0">
-            <h2 className="truncate font-bold text-ink">
-              <a href={eventPath(eventId)} onClick={onLeave} className="hover:underline">
-                <span aria-hidden="true">👥 </span>
-                {chat.event_title}
-              </a>
-            </h2>
-            <p className="truncate text-xs text-muted">Group chat · everyone who joined</p>
-          </div>
-        )}
-      </div>
-      <ConnectionBanner show={failed} />
-      {!data && <div className="flex-1">{!failed && <PopupNote>Loading…</PopupNote>}</div>}
-      {data && !chat && <PopupNote>Only the organizer and people who joined can see this group chat.</PopupNote>}
-      {chat && <MessageList messages={data.messages} uid={uid} showSenders />}
-      {chat && <MessageForm send={(content) => sendGroupMessage({ eventId, senderUid: uid, content })} onSent={refresh} />}
     </>
   )
 }
@@ -254,9 +209,7 @@ function GroupChatView({ eventId, uid, onBack, onLeave }) {
 // group). Polling only runs while the popup is open.
 export default function MessagesPopup({ profile }) {
   const [open, setOpen] = useState(false)
-  // The open chat's key: a direct chat_id, or groupChatKey(eventId).
   const [chatId, setChatId] = useState(null)
-  const groupEventId = groupChatEventId(chatId)
   const ref = useRef(null)
   useDismiss(open, setOpen, ref)
 
@@ -282,15 +235,7 @@ export default function MessagesPopup({ profile }) {
       </button>
       {open && (
         <div role="dialog" aria-label="Messages" className={popupPanelClass}>
-          {groupEventId ? (
-            <GroupChatView
-              key={chatId}
-              eventId={groupEventId}
-              uid={profile.uid}
-              onBack={() => setChatId(null)}
-              onLeave={() => setOpen(false)}
-            />
-          ) : chatId ? (
+          {chatId ? (
             <ChatView key={chatId} chatId={chatId} uid={profile.uid} onBack={() => setChatId(null)} onLeave={() => setOpen(false)} />
           ) : (
             <ChatList profile={profile} onSelect={setChatId} />

@@ -98,10 +98,10 @@ The platform is open to any campus event: study sessions, club meetings, open mi
 - The popup has two views: the chat list, and one open chat with its messages and a text field. Polling only runs while the popup is open
 - The "Direct message" button on the detail page opens the popup on the chat with the organizer, creating it first if needed. The message buttons in the "Who's going" list do the same for that person
 - Chats with no messages don't appear in the list, for either person. Opening a chat doesn't notify the other person; they see it once a message is sent
-- Two users share one chat. A new chat is named after the event it started from, and later messages about other events go in the same chat
+- Two users share one direct chat (being in the same event group chat doesn't count). A new chat is named after the event it started from, and later messages about other events go in the same chat
 - Deleted accounts show as "Deleted account"; their chats stay readable, but the text field is replaced by a note that you can't reply
-- Event group chats: every event has one group chat. Members are the organizer plus everyone who joined, so joining adds you and leaving removes you right away (you then can't read it). They show in the same list, named after the event with 👥 and "Group chat" under it; like direct chats, only ones with messages appear. In a group chat, other people's messages show the sender's name above them, and the header title links to the event. The list and chats poll every 2 seconds like direct chats
-- The popup is titled "Messages" since it holds both kinds. Its open chat is a key: a direct chat's `chat_id`, or `event:<event_id>` for a group (`groupChatKey()` / `groupChatEventId()` in `src/utils/chat_events.js`; open one from any page with `openGroupChat(eventId)`)
+- Event group chats: every event has one group chat. Members are the organizer plus everyone who joined, so joining adds you and leaving removes you right away (you then can't read it). They live in the same tables as direct chats (`chats_list` / `chat_msgs`) and show in the same list, named after the event with 👥 and "Group chat" under it; like direct chats, only ones with messages appear. In a group chat, other people's messages show the sender's name above them, and the header title links to the event. The list and chats poll every 2 seconds like direct chats
+- The popup is titled "Messages" since it holds both kinds. A group chat's `chat_id` is `event:<event_id>` (`groupChatId()` in `src/utils/chat_events.js`; open one from any page with `openGroupChat(eventId)`)
 
 ### Notification inbox
 
@@ -159,10 +159,10 @@ The platform is open to any campus event: study sessions, club meetings, open mi
 - Tables for direct messages
     - Create table for chat messages (message ID, message content, date, sender) labeled with its belonging chat ID
         - Fetch chat list: Query chats based on UID → Query participant UIDs based on chat ID
-    - Use another table for lists of chats (chat ID, UID, user-defined name/label); separate entries for each user
-- Table for event group chat messages (`event_chat_msgs`)
-    - Message ID, event ID, sender UID, content (1–2000 chars), date. Deleted with the event
-    - No membership table: members are the organizer plus `joined_events`. The `is_event_member(event_id)` function backs RLS, so only members can read, and they can only send as themselves. Messages can't be edited or deleted
+    - Use another table for lists of chats (chat ID, UID, user-defined name/label, event ID); separate entries for each user
+    - Event group chats use the same two tables: `chats_list.event_id` is set and `chat_id` is `'event:' || event_id` (direct chats have `event_id` NULL and a UUID `chat_id`)
+        - Group rows are managed only by database triggers: the organizer is added when the event is posted, joiners are added and removed with `joined_events`, `chat_name` follows the event title, and deleting the event deletes the chat and its messages
+        - RLS lets users insert, update, and delete only direct chat rows (`event_id` NULL and no `event:` chat id), so nobody can add themselves to a group. Reading and sending use the existing `is_chat_member()` rules
 - Table for notifications
     - Notification ID, recipient UID, actor UID (who did it; NULL for reminders), event ID (NULL once the event is deleted), event title (saved so deleted events still have a name), type, details (JSON: the new time/place for `event_updated`), date, read flag
     - Rows are only created by database code: the `on_event_joined`, `on_event_updated`, and `on_event_deleted` triggers and the `create_due_reminders()` function. Users can read their own and change only `is_read`
@@ -244,15 +244,11 @@ Direct message functions in `src/api.jsx`:
 
 | Function | What it does |
 |---|---|
-| `listChats(uid)` | The user's chats that have messages, with `other` (the other participant) and `latest` (the newest message) attached, most recently active first |
-| `getChat(chatId, uid)` | One of the user's chats with `other` attached, or `null` if they aren't in it |
-| `listMessages(chatId)` | A chat's newest 200 messages, oldest first |
+| `listChats(uid)` | The user's direct and group chats that have messages, with `latest` (the newest message, with `sender`) attached, most recently active first. Direct chats also have `other` (the other participant); group chats have `event_id` |
+| `getChat(chatId, uid)` | One of the user's chats (direct chats with `other` attached), or `null` if they aren't in it |
+| `listMessages(chatId)` | A chat's newest 200 messages with `sender`, oldest first |
 | `sendMessage({ chatId, senderUid, content })` | Validates (1–2000 characters), then sends a message |
-| `listGroupChats(uid)` | Group chats of events the user organizes or joined that have messages, as `{ event_id, event_title, latest }` (`latest` has `sender`), most recently active first |
-| `getGroupChat(eventId, uid)` | The event (`{ event_id, event_title, organizer_uid }`) if the user is a member, else `null` |
-| `listGroupMessages(eventId)` | A group chat's newest 200 messages with `sender`, oldest first |
-| `sendGroupMessage({ eventId, senderUid, content })` | Validates (1–2000 characters), then sends to the group |
-| `findOrCreateChat({ uid, otherUid, chatName })` | Returns the id of the two users' chat, creating it if needed. Adds your own `chats_list` row first, because RLS only lets chat members add other participants |
+| `findOrCreateChat({ uid, otherUid, chatName })` | Returns the id of the two users' direct chat (group chats don't count), creating it if needed. Adds your own `chats_list` row first, because RLS only lets chat members add other participants |
 
 ## Stack
 
@@ -307,7 +303,7 @@ src/
     routes.js               # hash routes: path builders, useRoute(), navigate()
     format.js               # dates, "Deleted account" names, category glyphs
     capacity.js             # headcount: joinedCount(), isFull(), spotsLabel()
-    chat_events.js          # openChat(key) / openGroupChat(eventId): opens the messages popup from any page
+    chat_events.js          # openChat(chatId) / openGroupChat(eventId): opens the messages popup from any page
     use_dismiss.js          # useDismiss(): closes a popup on Escape or an outside click
     use_polling.js          # usePolling(): re-fetches data on a timer, keeps it through failures
     toast.js                # showToast(message): confirms an action from any page
