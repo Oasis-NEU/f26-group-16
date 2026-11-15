@@ -99,8 +99,12 @@ The platform is open to any campus event: study sessions, club meetings, open mi
 ### Notification inbox
 
 - Bell button in the menu bar with a badge showing the number of unread notifications (updates every 5 seconds)
-- Popup lists the newest 30 notifications, each saying what happened and when, and links to the event
-- For now the only notification is "<name> joined <event>", sent to the organizer. Joining your own event sends nothing, and leaving and rejoining doesn't notify again
+- Popup lists the newest 30 notifications, each saying what happened and when, and links to the event (except for deleted events, which have no page)
+- Notification types (`notification_type`):
+    - `event_joined`: "<name> joined <event>", sent to the organizer. Joining your own event sends nothing, and leaving and rejoining doesn't notify again
+    - `event_updated`: "<event> changed: now <new time>, at <new place>", sent to everyone who joined when the organizer changes the time or location. Only the parts that changed are listed
+    - `event_deleted`: "<name> deleted <event>", sent to everyone who joined. Deleting an event is how organizers cancel it (there's no separate cancel state). Older notifications about the event are removed
+    - `event_reminder`: "Reminder: <event> starts at <time>", sent to everyone who joined, within the hour before it starts. There's no server to run a schedule, so `listNotifications()` calls the `create_due_reminders()` database function on every poll; it makes each reminder once. If you don't open the app during that hour, no reminder is made (there are no push notifications or emails anyway). Changing the start time clears old reminders so a new one comes for the new time
 - Opening the popup marks everything as read; those stay highlighted until it closes
 - If couldn't connect to server, display a small banner in the popup saying so and keep retrying
 
@@ -148,8 +152,8 @@ The platform is open to any campus event: study sessions, club meetings, open mi
         - Fetch chat list: Query chats based on UID → Query participant UIDs based on chat ID
     - Use another table for lists of chats (chat ID, UID, user-defined name/label); separate entries for each user
 - Table for notifications
-    - Notification ID, recipient UID, actor UID (who did it), event ID, type, date, read flag
-    - Rows are only created by the `on_event_joined` database trigger. Users can read their own and change only `is_read`
+    - Notification ID, recipient UID, actor UID (who did it; NULL for reminders), event ID (NULL once the event is deleted), event title (saved so deleted events still have a name), type, details (JSON: the new time/place for `event_updated`), date, read flag
+    - Rows are only created by database code: the `on_event_joined`, `on_event_updated`, and `on_event_deleted` triggers and the `create_due_reminders()` function. Users can read their own and change only `is_read`
 
 All date and time values are represented using UNIX timestamps in seconds. Use a separate library to encode uploaded picture as WebP to support Safari.
 
@@ -221,7 +225,7 @@ Notification functions in `src/api.jsx`:
 
 | Function | What it does |
 |---|---|
-| `listNotifications(uid)` | The user's newest 30 notifications with `actor` and `event` attached, newest first |
+| `listNotifications(uid)` | Creates any due reminders (`create_due_reminders()`), then returns the user's newest 30 notifications with `actor` and `event` attached, newest first. `event` is null for deleted events; use the row's `event_title` then |
 | `markNotificationsRead(uid)` | Marks all of the user's unread notifications as read |
 
 Direct message functions in `src/api.jsx`:
