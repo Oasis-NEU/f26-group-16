@@ -457,12 +457,19 @@ export async function deleteComment(commentId) {
 // ---------- chats (direct and event group) ----------
 // A chat has one chats_list row per participant, sharing a chat_id, and its
 // messages are in chat_msgs.
-// - Direct chats: two people, `event_id` null. Each row holds that user's own
-//   name for the chat.
+// - Direct chats: two people, `event_id` null.
 // - Event group chats: `event_id` set and chat_id "event:<event_id>"
 //   (groupChatId in src/utils/chat_events.js). Database triggers add the
 //   organizer and everyone who joins, and remove people who leave, so the app
-//   never writes these rows. See docs/main_schema.sql.
+//   never adds or removes these rows. See docs/main_schema.sql.
+// Each row's `chat_name` is that user's own label for the chat, or null to
+// show the other person's name / the event title (chatTitle() in
+// src/utils/format.js). renameChat() is the only change the app makes to a
+// group chat row.
+
+// Chat rows come with `event` ({ event_title }) attached for group chats, so an
+// unlabeled group chat can show the event's current title.
+const CHAT_COLUMNS = 'chat_id, chat_name, event_id, event:events(event_title)'
 
 // Messages come with `sender` attached, for names in group chats.
 const MESSAGE_COLUMNS = 'msg_id, msg_content, msg_time, sender_uid, sender:users(uid, full_name, is_active)'
@@ -486,7 +493,7 @@ async function otherParticipants(chatIds, uid) {
 // are left out, so opening a chat doesn't show up for the other person until
 // something is sent. Opening it again finds the same chat.
 export async function listChats(uid) {
-  const chats = unwrap(await supabase.from('chats_list').select('chat_id, chat_name, event_id').eq('user_id', uid))
+  const chats = unwrap(await supabase.from('chats_list').select(CHAT_COLUMNS).eq('user_id', uid))
   if (chats.length === 0) return []
   const directIds = chats.filter((chat) => !chat.event_id).map((chat) => chat.chat_id)
   const [others, latest] = await Promise.all([
@@ -518,7 +525,7 @@ export async function getChat(chatId, uid) {
   const chat = unwrap(
     await supabase
       .from('chats_list')
-      .select('chat_id, chat_name, event_id')
+      .select(CHAT_COLUMNS)
       .eq('chat_id', chatId)
       .eq('user_id', uid)
       .maybeSingle(),
@@ -552,11 +559,24 @@ export async function sendMessage({ chatId, senderUid, content }) {
   unwrap(await supabase.from('chat_msgs').insert({ chat_id: chatId, msg_content: text, sender_uid: senderUid }))
 }
 
+// Sets the user's own label for a chat (direct or group). A blank name clears
+// it (null), so the chat shows the other person's name or the event title.
+// Only the user's own row changes; the other participants keep their labels.
+export async function renameChat({ chatId, uid, chatName }) {
+  const name = chatName?.trim() || null
+  check(chatId && uid, 'Chat is required.')
+  check(!name || name.length <= CHAT_NAME_MAX, `Chat names must be ${CHAT_NAME_MAX} characters or less.`)
+  const rows = unwrap(
+    await supabase.from('chats_list').update({ chat_name: name }).eq('chat_id', chatId).eq('user_id', uid).select('chat_id'),
+  )
+  check(rows.length > 0, 'You’re not in this chat anymore.')
+}
+
 // Returns the id of the direct chat between the two users, creating it if
-// needed. `chatName` names a new chat for both of them. Only direct chats
-// count (`event_id` null): two people in the same event group chat still get
-// their own direct chat.
-export async function findOrCreateChat({ uid, otherUid, chatName }) {
+// needed. A new chat has no label (chat_name null) for either person. Only
+// direct chats count (`event_id` null): two people in the same event group
+// chat still get their own direct chat.
+export async function findOrCreateChat({ uid, otherUid }) {
   check(uid && otherUid, 'Both participants are required.')
   check(uid !== otherUid, 'You can’t message yourself.')
   const mine = unwrap(await supabase.from('chats_list').select('chat_id').eq('user_id', uid).is('event_id', null))
@@ -573,13 +593,10 @@ export async function findOrCreateChat({ uid, otherUid, chatName }) {
     if (shared.length > 0) return shared[0].chat_id
   }
 
-  const name = chatName?.trim() ?? ''
-  check(name, 'Chat name is required.')
-  check(name.length <= CHAT_NAME_MAX, `Chat names must be ${CHAT_NAME_MAX} characters or less.`)
   const chatId = crypto.randomUUID()
   // Your own row goes first: RLS only lets chat members add other participants.
-  unwrap(await supabase.from('chats_list').insert({ chat_id: chatId, chat_name: name, user_id: uid }))
-  const { error } = await supabase.from('chats_list').insert({ chat_id: chatId, chat_name: name, user_id: otherUid })
+  unwrap(await supabase.from('chats_list').insert({ chat_id: chatId, user_id: uid }))
+  const { error } = await supabase.from('chats_list').insert({ chat_id: chatId, user_id: otherUid })
   if (error) {
     await supabase.from('chats_list').delete().eq('chat_id', chatId).eq('user_id', uid)
     throw toError(error)

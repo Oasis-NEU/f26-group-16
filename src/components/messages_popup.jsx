@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { MESSAGE_MAX, getChat, listChats, listMessages, sendMessage } from '../api.jsx'
+import { CHAT_NAME_MAX, MESSAGE_MAX, getChat, listChats, listMessages, renameChat, sendMessage } from '../api.jsx'
 import { OPEN_CHAT_EVENT } from '../utils/chat_events.js'
-import { displayName, formatTimestamp } from '../utils/format.js'
+import { chatTitle, defaultChatTitle, displayName, formatTimestamp } from '../utils/format.js'
 import { eventPath } from '../utils/routes.js'
 import { useDismiss } from '../utils/use_dismiss.js'
 import { usePolling } from '../utils/use_polling.js'
@@ -38,11 +38,14 @@ function ChatList({ profile, onSelect }) {
                   <span className="flex items-baseline justify-between gap-3">
                     <span className="truncate font-semibold text-ink">
                       {chat.event_id && <span aria-hidden="true">👥 </span>}
-                      {chat.chat_name}
+                      {chatTitle(chat)}
                     </span>
                     <span className="shrink-0 text-xs text-muted">{formatTimestamp(chat.latest.msg_time)}</span>
                   </span>
-                  <span className="block truncate text-xs text-muted">{chat.event_id ? 'Group chat' : displayName(chat.other)}</span>
+                  {/* An unlabeled direct chat is already titled with the person's name. */}
+                  {(chat.event_id || chat.chat_name) && (
+                    <span className="block truncate text-xs text-muted">{chat.event_id ? 'Group chat' : displayName(chat.other)}</span>
+                  )}
                   <span className="mt-0.5 block truncate text-sm text-muted">
                     {senderPrefix(chat)}
                     {chat.latest.msg_content}
@@ -144,6 +147,120 @@ function MessageForm({ chatId, uid, onSent }) {
   )
 }
 
+const headerIconButton =
+  'flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-sm disabled:cursor-not-allowed disabled:opacity-60'
+
+// The open chat's title with a ✏️ button to relabel it. A group chat's title
+// links to the event. A labeled direct chat shows the person's name under the
+// label; an unlabeled one is titled with their name, linking to their profile.
+function ChatHeading({ chat, onLeave, onEdit, editButtonRef }) {
+  const isGroup = Boolean(chat.event_id)
+  let title = chatTitle(chat)
+  let subtitle = null
+  if (isGroup) {
+    title = (
+      <a href={eventPath(chat.event_id)} onClick={onLeave} className="hover:underline">
+        <span aria-hidden="true">👥 </span>
+        {chatTitle(chat)}
+      </a>
+    )
+    subtitle = <p className="truncate text-xs text-muted">Group chat · everyone who joined</p>
+  } else if (!chat.chat_name) {
+    title = <UserName user={chat.other} onClick={onLeave} />
+  } else {
+    subtitle = (
+      <p className="truncate text-xs">
+        <UserName user={chat.other} onClick={onLeave} />
+      </p>
+    )
+  }
+
+  return (
+    <div className="min-w-0 flex-1">
+      <div className="flex min-w-0 items-center gap-1">
+        <h2 className="min-w-0 truncate font-bold text-ink">{title}</h2>
+        <button
+          ref={editButtonRef}
+          type="button"
+          onClick={onEdit}
+          aria-label="Rename chat"
+          title="Rename chat (only you see this)"
+          className={`${headerIconButton} text-muted hover:bg-brand-50`}
+        >
+          <span aria-hidden="true">✏️</span>
+        </button>
+      </div>
+      {subtitle}
+    </div>
+  )
+}
+
+// Text field for the user's own label, with save (✓) and cancel (✕). Saving a
+// blank field clears the label, so the chat goes back to its default name
+// (shown as the placeholder). Escape cancels without closing the popup.
+// `onDone(saved)` closes the editor.
+function ChatNameEditor({ chat, uid, onDone }) {
+  const [name, setName] = useState(chat.chat_name ?? '')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+
+  const handleSubmit = async (event) => {
+    event.preventDefault()
+    if (busy) return
+    setBusy(true)
+    setError('')
+    try {
+      await renameChat({ chatId: chat.chat_id, uid, chatName: name })
+      await onDone(true)
+    } catch (err) {
+      setError(err.message)
+      setBusy(false)
+    }
+  }
+
+  const handleKeyDown = (event) => {
+    if (event.key !== 'Escape') return
+    // Keep the popup's own Escape handler (useDismiss) from closing it.
+    event.stopPropagation()
+    if (!busy) onDone(false)
+  }
+
+  return (
+    <form onSubmit={handleSubmit} onKeyDown={handleKeyDown} className="min-w-0 flex-1 space-y-2">
+      <div className="flex items-center gap-1">
+        <input
+          value={name}
+          onChange={(event) => setName(event.target.value)}
+          maxLength={CHAT_NAME_MAX}
+          aria-label="Chat name"
+          placeholder={defaultChatTitle(chat)}
+          autoFocus
+          onFocus={(event) => event.target.select()}
+          className={`${inputClass} min-w-0 px-3 py-1.5 text-sm`}
+        />
+        <button
+          type="submit"
+          disabled={busy}
+          aria-label="Save chat name"
+          className={`${headerIconButton} border border-line bg-surface font-bold text-success hover:bg-success-50`}
+        >
+          <span aria-hidden="true">✓</span>
+        </button>
+        <button
+          type="button"
+          onClick={() => onDone(false)}
+          disabled={busy}
+          aria-label="Cancel renaming"
+          className={`${headerIconButton} border border-line bg-surface font-bold text-danger hover:bg-danger-50`}
+        >
+          <span aria-hidden="true">✕</span>
+        </button>
+      </div>
+      <ErrorMessage message={error} />
+    </form>
+  )
+}
+
 // One chat. A direct chat shows the other person (`onLeave` closes the popup
 // when their name opens their profile). A group chat links its title to the
 // event and shows who sent each message; leaving the event removes you, so the
@@ -156,6 +273,16 @@ function ChatView({ chatId, uid, onBack, onLeave }) {
   const { data, failed, refresh } = usePolling(load, POLL_MS)
   const chat = data?.chat
   const isGroup = Boolean(chat?.event_id)
+  const [editing, setEditing] = useState(false)
+  const editButtonRef = useRef(null)
+
+  // After a save, wait for the new name to load so the old one doesn't flash
+  // back. Focus returns to the edit button either way.
+  const finishEditing = async (saved) => {
+    if (saved) await refresh()
+    setEditing(false)
+    requestAnimationFrame(() => editButtonRef.current?.focus())
+  }
 
   return (
     <>
@@ -168,28 +295,12 @@ function ChatView({ chatId, uid, onBack, onLeave }) {
         >
           <span aria-hidden="true">←</span>
         </button>
-        {chat && (
-          <div className="min-w-0">
-            {isGroup ? (
-              <>
-                <h2 className="truncate font-bold text-ink">
-                  <a href={eventPath(chat.event_id)} onClick={onLeave} className="hover:underline">
-                    <span aria-hidden="true">👥 </span>
-                    {chat.chat_name}
-                  </a>
-                </h2>
-                <p className="truncate text-xs text-muted">Group chat · everyone who joined</p>
-              </>
-            ) : (
-              <>
-                <h2 className="truncate font-bold text-ink">{chat.chat_name}</h2>
-                <p className="truncate text-xs">
-                  <UserName user={chat.other} onClick={onLeave} />
-                </p>
-              </>
-            )}
-          </div>
-        )}
+        {chat &&
+          (editing ? (
+            <ChatNameEditor chat={chat} uid={uid} onDone={finishEditing} />
+          ) : (
+            <ChatHeading chat={chat} onLeave={onLeave} onEdit={() => setEditing(true)} editButtonRef={editButtonRef} />
+          ))}
       </div>
       <ConnectionBanner show={failed} />
       {!data && <div className="flex-1">{!failed && <PopupNote>Loading…</PopupNote>}</div>}

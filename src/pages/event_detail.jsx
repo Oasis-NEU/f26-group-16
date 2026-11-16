@@ -42,11 +42,11 @@ function useStartChat(profile) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
 
-  const startChat = async (otherUid, chatName) => {
+  const startChat = async (otherUid) => {
     setBusy(true)
     setError('')
     try {
-      openChat(await findOrCreateChat({ uid: profile.uid, otherUid, chatName }))
+      openChat(await findOrCreateChat({ uid: profile.uid, otherUid }))
     } catch (err) {
       setError(err.message)
     } finally {
@@ -136,9 +136,9 @@ function GuestListDialog({ open, onClose, joiners, profile, onMessage, messageDi
 
 // The first few people who joined, as name pills linking to their profiles,
 // with a button that opens the full list in a popup. Each person has a message
-// button; a new chat is named after this event.
+// button.
 // Reloads whenever `refreshKey` changes (after joining or leaving).
-function JoinerList({ eventId, eventTitle, profile, refreshKey, isOrganizer }) {
+function JoinerList({ eventId, profile, refreshKey, isOrganizer }) {
   const [state, setState] = useState(null)
   const [showAll, setShowAll] = useState(false)
   const { startChat, busy, error } = useStartChat(profile)
@@ -146,7 +146,7 @@ function JoinerList({ eventId, eventTitle, profile, refreshKey, isOrganizer }) {
   // The full list is a modal, which would cover the messages popup, so it closes first.
   const handleMessage = (user) => {
     setShowAll(false)
-    startChat(user.uid, eventTitle)
+    startChat(user.uid)
   }
 
   useEffect(() => {
@@ -687,7 +687,6 @@ export default function EventDetail({ eventId, profile }) {
           />
           <JoinerList
             eventId={event.event_id}
-            eventTitle={event.event_title}
             profile={profile}
             refreshKey={joinChanges}
             isOrganizer={isOrganizer}
@@ -697,7 +696,7 @@ export default function EventDetail({ eventId, profile }) {
             <div className="space-y-2">
               <button
                 type="button"
-                onClick={() => startChat(event.organizer_uid, event.event_title)}
+                onClick={() => startChat(event.organizer_uid)}
                 disabled={!organizerActive || dmBusy}
                 className={`${secondaryButton} w-full`}
               >
