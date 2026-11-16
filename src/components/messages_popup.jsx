@@ -42,9 +42,14 @@ function ChatList({ profile, onSelect }) {
                     </span>
                     <span className="shrink-0 text-xs text-muted">{formatTimestamp(chat.latest.msg_time)}</span>
                   </span>
-                  {/* An unlabeled direct chat is already titled with the person's name. */}
+                  {/* A labeled chat names the person or event under the label. An
+                      unlabeled direct chat is already titled with the person's name. */}
                   {(chat.event_id || chat.chat_name) && (
-                    <span className="block truncate text-xs text-muted">{chat.event_id ? 'Group chat' : displayName(chat.other)}</span>
+                    <span className="block truncate text-xs text-muted">
+                      {chat.event_id
+                        ? `Group chat${chat.chat_name ? ` · ${defaultChatTitle(chat)}` : ''}`
+                        : displayName(chat.other)}
+                    </span>
                   )}
                   <span className="mt-0.5 block truncate text-sm text-muted">
                     {senderPrefix(chat)}
@@ -150,21 +155,38 @@ function MessageForm({ chatId, uid, onSent }) {
 const headerIconButton =
   'flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-sm disabled:cursor-not-allowed disabled:opacity-60'
 
-// The open chat's title with a ✏️ button to relabel it. A group chat's title
-// links to the event. A labeled direct chat shows the person's name under the
-// label; an unlabeled one is titled with their name, linking to their profile.
+// The open chat's title with a ✏️ button to relabel it. Whatever names the
+// person or event (their name, the event title) links to their profile or the
+// event page. Unlabeled, that name is the title: a direct chat has no line under
+// it, a group chat has "Group chat". Labeled, the label is the title and the
+// name moves under it ("Group chat · <event>" for groups).
 function ChatHeading({ chat, onLeave, onEdit, editButtonRef }) {
   const isGroup = Boolean(chat.event_id)
   let title = chatTitle(chat)
   let subtitle = null
   if (isGroup) {
-    title = (
+    const eventLink = (
       <a href={eventPath(chat.event_id)} onClick={onLeave} className="hover:underline">
-        <span aria-hidden="true">👥 </span>
-        {chatTitle(chat)}
+        {defaultChatTitle(chat)}
       </a>
     )
-    subtitle = <p className="truncate text-xs text-muted">Group chat · everyone who joined</p>
+    title = (
+      <>
+        <span aria-hidden="true">👥 </span>
+        {chat.chat_name || eventLink}
+      </>
+    )
+    subtitle = (
+      <p className="truncate text-xs text-muted">
+        Group chat
+        {chat.chat_name && (
+          <>
+            {' · '}
+            <span className="text-ink">{eventLink}</span>
+          </>
+        )}
+      </p>
+    )
   } else if (!chat.chat_name) {
     title = <UserName user={chat.other} onClick={onLeave} />
   } else {
