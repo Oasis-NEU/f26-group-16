@@ -32,10 +32,10 @@ We’ll do practice problems on the whiteboards at 7 and 8. Snacks provided!', 1
 
 -- Example comments
 INSERT INTO event_comments (comment_id, event_id, comment_content, comment_time, sender_uid, replying_to) VALUES
-('030995d9-9fed-4f8b-80b6-fbc460379456', 'd3889db1-ef71-44cf-b671-9d3b5684620a', 'Will there be anyone who can help with hypothesis testing?', 1796159702, example_user, null),
+('030995d9-9fed-4f8b-80b6-fbc460379456', 'd3889db1-ef71-44cf-b671-9d3b5684620a', 'Will there be anyone who can help with hypothesis testing?', 1796159702, example_user_2, null),
  ('47374247-1115-4f9f-b4a7-0ce60465815b', '37c02568-92e6-4f2f-a3be-9d71f17dd390', 'Yes, the lot behind the gym is free after 5.', 1796159963, example_user, '9d76606f-06c3-4bda-b320-f06cf7c8f9b8'),
- ('5bebe448-33f8-46a7-a562-61146d9f0445', '37c02568-92e6-4f2f-a3be-9d71f17dd390', 'Do I need my own ball?', 1796159703, example_user, null),
- ('9d76606f-06c3-4bda-b320-f06cf7c8f9b8', '37c02568-92e6-4f2f-a3be-9d71f17dd390', 'Count me in! Is there parking nearby?', 1796159963, example_user, null),
+ ('5bebe448-33f8-46a7-a562-61146d9f0445', '37c02568-92e6-4f2f-a3be-9d71f17dd390', 'Do I need my own ball?', 1796159703, example_user_2, null),
+ ('9d76606f-06c3-4bda-b320-f06cf7c8f9b8', '37c02568-92e6-4f2f-a3be-9d71f17dd390', 'Count me in! Is there parking nearby?', 1796159963, example_user_2, null),
  ('b8b702cb-2f2e-45ac-a5b3-29c57468d83f', '37c02568-92e6-4f2f-a3be-9d71f17dd390', 'Nope, we have spares. Just bring sneakers.', 1796159704, example_user, '5bebe448-33f8-46a7-a562-61146d9f0445'),
  ('d471cd53-0406-4fa6-808d-3386c1d6a353', 'd3889db1-ef71-44cf-b671-9d3b5684620a', 'Yes! One of the TAs covers intro stats.', 1796159703, example_user, '030995d9-9fed-4f8b-80b6-fbc460379456');
 
@@ -46,4 +46,16 @@ IF example_user_2 IS NOT NULL THEN
     ('d3889db1-ef71-44cf-b671-9d3b5684620a', example_user_2);
 END IF;
 
+IF to_regclass('public._example_images') IS NOT NULL THEN
+    -- Insert image data for events
+    UPDATE events AS target
+    SET picture_data = source.image_data
+    FROM _example_images AS source
+    WHERE target.event_id = source.item_id;
+    -- Insert profile picture
+    UPDATE users as target
+    SET profile_pic_data = source.image_data
+    FROM _example_images AS source
+    WHERE target.uid = example_user_2 AND source.item_id = 'user2@example.com';
+END IF;
 END $$;
