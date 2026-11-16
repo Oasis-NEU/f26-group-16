@@ -237,28 +237,22 @@ CREATE TABLE chat_msgs(
 -- shows the event's current title. SECURITY DEFINER because users can't add or
 -- remove group chat rows themselves (see RLS below).
 
-CREATE OR REPLACE FUNCTION public.group_chat_add_organizer() RETURNS trigger
+-- Adds a user to the event's group chat. Trigger functions can't take
+-- parameters, so each trigger passes the name of the column holding the user's
+-- uid (TG_ARGV[0]): organizer_uid on events, joiner_uid on joined_events. Both
+-- tables have event_id.
+CREATE OR REPLACE FUNCTION public.group_chat_add_member() RETURNS trigger
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = '' AS $$
 BEGIN
     INSERT INTO public.chats_list (chat_id, user_id, event_id)
-    VALUES ('event:' || new.event_id, new.organizer_uid, new.event_id)
+    VALUES ('event:' || new.event_id, to_jsonb(new) ->> TG_ARGV[0], new.event_id)
     ON CONFLICT (chat_id, user_id) DO NOTHING;
     RETURN new;
 END $$;
 CREATE OR REPLACE TRIGGER trg_group_chat_add_organizer AFTER INSERT ON events
-    FOR EACH ROW EXECUTE FUNCTION public.group_chat_add_organizer();
-
-CREATE OR REPLACE FUNCTION public.group_chat_add_joiner() RETURNS trigger
-LANGUAGE plpgsql SECURITY DEFINER SET search_path = '' AS $$
-BEGIN
-    INSERT INTO public.chats_list (chat_id, user_id, event_id)
-    SELECT 'event:' || e.event_id, new.joiner_uid, e.event_id
-    FROM public.events e WHERE e.event_id = new.event_id
-    ON CONFLICT (chat_id, user_id) DO NOTHING;
-    RETURN new;
-END $$;
+    FOR EACH ROW EXECUTE FUNCTION public.group_chat_add_member('organizer_uid');
 CREATE OR REPLACE TRIGGER trg_group_chat_add_joiner AFTER INSERT ON joined_events
-    FOR EACH ROW EXECUTE FUNCTION public.group_chat_add_joiner();
+    FOR EACH ROW EXECUTE FUNCTION public.group_chat_add_member('joiner_uid');
 
 -- The organizer stays in even if they leave their own event's join list.
 CREATE OR REPLACE FUNCTION public.group_chat_remove_joiner() RETURNS trigger
