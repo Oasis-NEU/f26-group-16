@@ -423,14 +423,16 @@ function CommentForm({ eventId, profile, replyingTo, onPosted, onCancel }) {
   )
 }
 
-// `onDelete` is set only on your own comments.
-function Comment({ comment, onReply, onDelete }) {
+// `onDelete` is set only on your own comments. `organizerUid` marks the
+// event organizer's comments with an "(Organizer)" label.
+function Comment({ comment, organizerUid, onReply, onDelete }) {
   return (
     <div className="flex gap-3">
       <Avatar user={comment.sender} className="h-9 w-9 text-sm" />
       <div className="min-w-0 flex-1">
         <p className="text-sm">
           <UserName user={comment.sender} className="font-semibold" />
+          {comment.sender_uid === organizerUid && <span className="font-semibold text-brand-600"> (Organizer)</span>}
           <span className="text-muted"> · {formatTimestamp(comment.comment_time)}</span>
         </p>
         <p className="mt-1 whitespace-pre-line break-words text-ink">{comment.comment_content}</p>
@@ -454,7 +456,7 @@ function Comment({ comment, onReply, onDelete }) {
   )
 }
 
-function Comments({ eventId, profile }) {
+function Comments({ eventId, organizerUid, profile }) {
   const [result, setResult] = useState(null)
   const [retries, setRetries] = useState(0)
   // The main comment whose reply form is open.
@@ -530,7 +532,12 @@ function Comments({ eventId, profile }) {
         <ul className="space-y-6">
           {threads.map(({ main, replies }) => (
             <li key={main.comment_id} className="space-y-4 rounded-2xl border border-line bg-surface p-5 shadow-sm">
-              <Comment comment={main} onReply={() => setReplyTo(main.comment_id)} onDelete={deleteHandler(main)} />
+              <Comment
+                comment={main}
+                organizerUid={organizerUid}
+                onReply={() => setReplyTo(main.comment_id)}
+                onDelete={deleteHandler(main)}
+              />
               {(replies.length > 0 || replyTo === main.comment_id) && (
                 <div className="space-y-4 border-l-2 border-brand-100 pl-4 sm:ml-12">
                   {replies.map((reply) => (
@@ -538,6 +545,7 @@ function Comments({ eventId, profile }) {
                     <Comment
                       key={reply.comment_id}
                       comment={reply}
+                      organizerUid={organizerUid}
                       onReply={() => setReplyTo(main.comment_id)}
                       onDelete={deleteHandler(reply)}
                     />
@@ -715,7 +723,7 @@ export default function EventDetail({ eventId, profile }) {
               <p className="text-muted">The organizer hasn’t added a description yet.</p>
             )}
           </section>
-          <Comments eventId={event.event_id} profile={profile} />
+          <Comments eventId={event.event_id} organizerUid={event.organizer_uid} profile={profile} />
         </div>
       </div>
     </article>

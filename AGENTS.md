@@ -49,6 +49,7 @@ The platform is open to any campus event: study sessions, club meetings, open mi
     - With a headcount limit it reads "4/10 joined · 6 spots left". Once full, the button is disabled and says "Full" for people who haven't joined; people already in can still leave
     - The database rejects joins past the limit (`trg_check_event_capacity`), so a stale page can't overfill an event. If that happens, the page shows "Sorry, this event just filled up." and switches to Full
 - Comments with replies
+    - Each comment shows the sender's profile picture (or their initial) and name. The organizer's comments and replies get a red "(Organizer)" label after the name
     - Your own comments and replies have a "Delete" button next to "Reply". It asks first in a confirmation dialog; deleting a main comment also deletes its replies
 - "Direct message" button to contact the organizer
 - "👥 Event chat" button, shown only to the organizer and people who joined. It opens the event's event chat in the messages popup
