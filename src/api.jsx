@@ -469,8 +469,11 @@ export async function deleteComment(commentId) {
 // group chat row.
 
 // Chat rows come with `event` ({ event_title }) attached for group chats, so an
-// unlabeled group chat can show the event's current title.
-const CHAT_COLUMNS = 'chat_id, chat_name, event_id, event:events(event_title)'
+// unlabeled group chat can show the event's current title. `unread_count` is
+// how many messages from other people the user hasn't seen, and
+// `last_msg_time` the newest message's time (null with no messages). Database
+// triggers keep both; markChatRead() clears the count.
+const CHAT_COLUMNS = 'chat_id, chat_name, event_id, unread_count, last_msg_time, event:events(event_title)'
 
 // Messages come with `sender` attached, for names in group chats.
 const MESSAGE_COLUMNS = 'msg_id, msg_content, msg_time, sender_uid, sender:users(uid, full_name, is_active)'
@@ -489,12 +492,20 @@ async function otherParticipants(chatIds, uid) {
 }
 
 // The user's chats with the newest message (`latest`, with `sender`) attached,
-// most recently active first. Direct chats also get the other participant
-// (`other`); group chats have `event_id` set instead. Chats with no messages
-// are left out, so opening a chat doesn't show up for the other person until
-// something is sent. Opening it again finds the same chat.
+// most recently active first (by `last_msg_time`). Direct chats also get the
+// other participant (`other`); group chats have `event_id` set instead. Chats
+// with no messages are left out, so opening a chat doesn't show up for the
+// other person until something is sent. Opening it again finds the same chat.
 export async function listChats(uid) {
-  const chats = unwrap(await supabase.from('chats_list').select(CHAT_COLUMNS).eq('user_id', uid))
+  const chats = unwrap(
+    await supabase
+      .from('chats_list')
+      .select(CHAT_COLUMNS)
+      .eq('user_id', uid)
+      .not('last_msg_time', 'is', null)
+      .order('last_msg_time', { ascending: false })
+      .order('chat_id'),
+  )
   if (chats.length === 0) return []
   const directIds = chats.filter((chat) => !chat.event_id).map((chat) => chat.chat_id)
   const [others, latest] = await Promise.all([
@@ -517,7 +528,23 @@ export async function listChats(uid) {
   return chats
     .map((chat, i) => ({ ...chat, other: others.get(chat.chat_id) ?? null, latest: latest[i] }))
     .filter((chat) => chat.latest)
-    .sort((a, b) => b.latest.msg_time - a.latest.msg_time)
+}
+
+// Just the user's chats with unread messages ({ chat_id, event_id,
+// unread_count }), for the badge on the messages button. Small enough to run
+// the whole time the user is logged in.
+export async function listUnreadChats(uid) {
+  return unwrap(
+    await supabase.from('chats_list').select('chat_id, event_id, unread_count').eq('user_id', uid).gt('unread_count', 0),
+  )
+}
+
+// Marks one of the user's chats as read (unread_count 0). Called on every update
+// of the open chat; the database only writes when something was unread.
+// Returns whether anything changed, so callers only refresh badges then.
+export async function markChatRead(chatId) {
+  check(chatId, 'Chat is required.')
+  return unwrap(await supabase.rpc('mark_chat_read', { target_chat: chatId }))
 }
 
 // One of the user's chats (direct chats with `other` attached), or null if

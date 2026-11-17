@@ -4,7 +4,7 @@ import { displayName, formatEventTime, formatTimestamp } from '../utils/format.j
 import { eventPath } from '../utils/routes.js'
 import { useDismiss } from '../utils/use_dismiss.js'
 import { usePolling } from '../utils/use_polling.js'
-import { ConnectionBanner, PopupNote, popupPanelClass } from './ui.jsx'
+import { ConnectionBanner, CountBadge, PopupNote, popupPanelClass } from './ui.jsx'
 
 // Slower than chats: this runs the whole time you're logged in, to keep the
 // unread count on the button up to date.
@@ -117,14 +117,8 @@ export default function NotificationsPopup({ profile }) {
         className="relative flex h-10 w-10 items-center justify-center rounded-xl border border-line bg-surface text-lg hover:bg-brand-50"
       >
         <span aria-hidden="true">🔔</span>
-        {unreadIds.length > 0 && (
-          <span
-            aria-hidden="true"
-            className="absolute -right-1.5 -top-1.5 flex h-5 min-w-5 items-center justify-center rounded-full bg-brand-500 px-1 text-xs font-bold text-white"
-          >
-            {unreadIds.length > 9 ? '9+' : unreadIds.length}
-          </span>
-        )}
+        {/* At most 30 load, so the count stops at 9+. */}
+        <CountBadge count={unreadIds.length} max={9} className="absolute -right-1.5 -top-1.5" />
       </button>
       {open && (
         <NotificationsPanel

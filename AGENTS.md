@@ -95,11 +95,17 @@ The platform is open to any campus event: study sessions, club meetings, open mi
 
 ### Direct messages popup
 
-- List of messages displayed in a menu bar popup on homepage, displaying the chat name and most recent message for each entry
+- List of messages displayed in a menu bar popup on homepage, displaying the chat name and most recent message for each entry, most recent chat first (by `last_msg_time`)
+- Unread counts:
+    - The 💬 button has a badge with the total unread messages across all chats, like the bell. It stays live the whole time you're logged in (Realtime, or a 5-second poll while that's down). The chat you have open doesn't count toward it
+    - Each tab shows the unread total for its chats, and each chat in the list shows its own count on the right, under the time (like WhatsApp). Unread chats also get a bold title, red time, and darker preview
+    - Badges cap at "99+". Your own messages never count as unread
+    - While a chat is open, every update marks it as read (`markChatRead()`), as long as the browser tab is visible; coming back to the tab marks it read too
+    - Joining an event chat that already has messages starts at 0 unread
 - The chat list has two tabs at the top: "Messages" (direct chats, the default) and "Event chats". Left/right arrow keys switch tabs. Going back from an open chat returns to its tab, and opening a chat from another page (e.g. "Direct message" or "👥 Event chat") picks the matching tab
 - Each chat supports simple text messages, attempt to fetch latest messages every 2 seconds in the page
 - If couldn't connect to server, display a small banner in the popup saying so and retry connection as usual (every 2 seconds)
-- The popup has two views: the chat list, and one open chat with its messages and a text field. Polling only runs while the popup is open
+- The popup has two views: the chat list, and one open chat with its messages and a text field. The list and chats only load while the popup is open (only the button's unread count runs all the time)
 - The "Direct message" button on the detail page opens the popup on the chat with the organizer, creating it first if needed. The message buttons in the "Who's going" list do the same for that person
 - Chats with no messages don't appear in the list, for either person. Opening a chat doesn't notify the other person; they see it once a message is sent
 - Two users share one direct chat (being in the same event chat doesn't count). Later messages about other events go in the same chat
@@ -131,7 +137,7 @@ The platform is open to any campus event: study sessions, club meetings, open mi
 
 - Website logo on the left
 - Navigation buttons for homepage, personal schedule, and user profile pages placed on the right
-- Direct messages popup button placed to the adjacent left of the navigation buttons
+- Direct messages popup button placed to the adjacent left of the navigation buttons, with an unread message badge
 - Notification inbox button placed to the adjacent left of the direct messages button
 - Theme button (☀️/🌙) placed to the adjacent left of the notification inbox button; it switches between light and dark mode. Below `md` it moves into the ☰ menu as a "Light mode" / "Dark mode" item
 
@@ -164,8 +170,13 @@ The platform is open to any campus event: study sessions, club meetings, open mi
 - Tables for direct messages
     - Create table for chat messages (message ID, message content, date, sender) labeled with its belonging chat ID
         - Fetch chat list: Query chats based on UID → Query participant UIDs based on chat ID
-    - Use another table for lists of chats (chat ID, UID, user-defined name/label, event ID); separate entries for each user
+    - Use another table for lists of chats (chat ID, UID, user-defined name/label, event ID, unread count, last message time); separate entries for each user
         - `chat_name` is nullable: it's the user's own label, and NULL (the default) shows the other person's name or the event title (`chatTitle(chat)` in `src/utils/format.js`)
+        - `unread_count` (messages from others the user hasn't seen) and `last_msg_time` (the chat's newest `msg_time`, NULL with no messages) are kept by database code only:
+            - `trg_chat_msgs_update_chats`: each new message raises every member's `last_msg_time` to the newest message time and adds 1 to everyone's `unread_count` except the sender's
+            - `trg_chats_list_init_counts`: new rows always start at 0 unread with the chat's current newest message time, whatever the insert says (so joining an event chat with history still lists it, and nobody can plant a count on someone else's row)
+            - `mark_chat_read(chat_id)`: sets the caller's own count to 0, only writing when it wasn't 0. Returns whether it changed anything
+        - `trg_chat_msgs_set_time` sets `msg_time` to the server's time for messages sent from the app, so nobody can backdate a message or pin a chat to the top. SQL editor and secret key inserts (e.g. example data) keep theirs
     - Event group chats use the same two tables: `chats_list.event_id` is set and `chat_id` is `'event:' || event_id` (direct chats have `event_id` NULL and a UUID `chat_id`)
         - Group rows are managed only by database triggers: the organizer is added when the event is posted, joiners are added and removed with `joined_events` (rows start with `chat_name` NULL), and deleting the event deletes the chat and its messages
         - RLS lets users insert and delete only direct chat rows (`event_id` NULL and no `event:` chat id), so nobody can add themselves to a group. Users can update their own row in either kind of chat, but only the `chat_name` column (`GRANT UPDATE (chat_name)`), so nobody can move their row into another chat. Reading and sending use the existing `is_chat_member()` rules
@@ -177,7 +188,9 @@ All date and time values are represented using UNIX timestamps in seconds. Use a
 
 ### SQL Representation
 
-SQL representation of the database can be found in the `docs/main_schema.sql` file. Example data can be found in the `docs/example_data.sql` file. `docs/notifications.sql` adds notifications to a database that already has the rest of the schema, keeping its data.
+SQL representation of the database can be found in the `docs/main_schema.sql` file. Example data can be found in the `docs/example_data.sql` file. `docs/chat_unread_counts.sql` adds the chat unread counts to a database that already has the rest of the schema, keeping its data (it copies the "Chat unread counts" region of `main_schema.sql`, so change both together).
+
+Only `chat_msgs` is published to Supabase Realtime. Don't publish `chats_list`: Realtime skips RLS for DELETE events, so every subscriber would see who left which event chat. The unread badges re-fetch on new `chat_msgs` events instead.
 
 ### Supabase Auth
 
@@ -250,8 +263,10 @@ Direct message functions in `src/api.jsx`:
 
 | Function | What it does |
 |---|---|
-| `listChats(uid)` | The user's direct and group chats that have messages, with `latest` (the newest message, with `sender`) attached, most recently active first. Direct chats also have `other` (the other participant); group chats have `event_id` and `event` (`{ event_title }`). Show the name with `chatTitle(chat)` |
+| `listChats(uid)` | The user's direct and group chats that have messages (`last_msg_time` set), with `unread_count` and `latest` (the newest message, with `sender`) attached, most recently active first. Direct chats also have `other` (the other participant); group chats have `event_id` and `event` (`{ event_title }`). Show the name with `chatTitle(chat)` |
 | `getChat(chatId, uid)` | One of the user's chats (direct chats with `other` attached), or `null` if they aren't in it |
+| `listUnreadChats(uid)` | The user's chats with unread messages (`{ chat_id, event_id, unread_count }`), for the 💬 button's badge |
+| `markChatRead(chatId)` | Sets the user's own `unread_count` for the chat to 0. Returns whether anything was unread |
 | `listMessages(chatId)` | A chat's newest 200 messages with `sender`, oldest first |
 | `sendMessage({ chatId, senderUid, content })` | Validates (1–2000 characters), then sends a message |
 | `renameChat({ chatId, uid, chatName })` | Sets the user's own label for a direct or group chat (at most 100 characters). A blank name sets it to null |
@@ -302,10 +317,10 @@ src/
     ConfirmDialog.jsx       # modal "are you sure?" popup for deleting things
     Logo.jsx                # SVG Husky logo that barks on hover
     menu_bar.jsx            # Top menu bar
-    messages_popup.jsx      # Messages button + popup: direct and group chat list, open chat, 2-second polling
+    messages_popup.jsx      # Messages button + unread badge + popup: direct and group chat list, open chat, live updates
     notifications_popup.jsx # Bell button + unread badge + notification list
     toaster.jsx             # Shows showToast() confirmations at the bottom of the screen
-    ui.jsx                  # shared button/input styles, ErrorMessage, Notice
+    ui.jsx                  # shared button/input styles, ErrorMessage, Notice, CountBadge
   utils/
     supabase.js             # Supabase client (only api.jsx imports it)
     routes.js               # hash routes: path builders, useRoute(), navigate()
@@ -314,6 +329,7 @@ src/
     chat_events.js          # openChat(chatId) / openGroupChat(eventId): opens the messages popup from any page
     use_dismiss.js          # useDismiss(): closes a popup on Escape or an outside click
     use_polling.js          # usePolling(): re-fetches data on a timer, keeps it through failures
+    use_live_chat.js        # useLiveChat(): usePolling() that also re-fetches on new messages (Supabase Realtime)
     toast.js                # showToast(message): confirms an action from any page
     theme.js                # useDarkMode(): light/dark switch, saved in localStorage as `numeet-theme`
     schedule.js             # schedule helpers: overlaps, conflicts, suggestions, block time labels

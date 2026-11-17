@@ -29,6 +29,21 @@ export function ConnectionBanner({ show }) {
   )
 }
 
+// Red unread-count pill. Shows nothing at 0, and "99+" (or `max`+) above
+// `max`. Hidden from screen readers: put the count in the parent's label or an
+// `sr-only` span instead.
+export function CountBadge({ count, max = 99, className = '' }) {
+  if (!count) return null
+  return (
+    <span
+      aria-hidden="true"
+      className={`flex h-5 min-w-5 shrink-0 items-center justify-center rounded-full bg-brand-500 px-1.5 text-xs font-bold text-white ${className}`}
+    >
+      {count > max ? `${max}+` : count}
+    </span>
+  )
+}
+
 export function PopupNote({ children }) {
   return <p className="px-5 py-8 text-center text-sm text-muted">{children}</p>
 }

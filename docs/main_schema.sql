@@ -216,6 +216,12 @@ CREATE TABLE chats_list(
     chat_name TEXT CHECK (char_length(btrim(chat_name)) BETWEEN 1 AND 100),
     user_id TEXT NOT NULL REFERENCES users(uid) ON UPDATE CASCADE,
     event_id TEXT REFERENCES events(event_id) ON DELETE CASCADE,
+    -- Messages from other people that this user hasn't seen yet. Kept by the
+    -- triggers under "Chat unread counts"; the app clears it with mark_chat_read().
+    unread_count INTEGER NOT NULL DEFAULT 0 CHECK (unread_count >= 0),
+    -- The newest msg_time in the chat, NULL until the first message. The chat
+    -- list sorts by it and leaves out chats where it's NULL.
+    last_msg_time BIGINT,
     CONSTRAINT uc_chat_user UNIQUE (chat_id, user_id),
     CONSTRAINT chk_group_chat_id CHECK (event_id IS NULL OR chat_id = 'event:' || event_id)
 );
@@ -277,6 +283,70 @@ BEGIN
 END $$;
 CREATE OR REPLACE TRIGGER trg_group_chat_delete_messages BEFORE DELETE ON events
     FOR EACH ROW EXECUTE FUNCTION public.group_chat_delete_messages();
+
+-- #region Chat unread counts
+-- Each chats_list row has the user's unread_count and the chat's
+-- last_msg_time. Only these triggers and mark_chat_read() change them: users
+-- can only update chat_name (see the GRANT below). All are SECURITY DEFINER
+-- because they write other people's rows or read messages before the user is
+-- a member.
+
+-- Messages sent from the app get the server's time, so nobody can backdate a
+-- message or pin a chat to the top of the list with a future one. Inserts
+-- from the SQL editor or the secret key (example data) keep their msg_time.
+CREATE OR REPLACE FUNCTION public.chat_msgs_set_time() RETURNS trigger
+LANGUAGE plpgsql SET search_path = '' AS $$
+BEGIN
+    IF current_user IN ('anon', 'authenticated') THEN
+        new.msg_time := extract(epoch FROM now())::bigint;
+    END IF;
+    RETURN new;
+END $$;
+CREATE OR REPLACE TRIGGER trg_chat_msgs_set_time BEFORE INSERT ON chat_msgs
+    FOR EACH ROW EXECUTE FUNCTION public.chat_msgs_set_time();
+
+-- A new message moves every member's last_msg_time up to the newest message
+-- time and adds one unread message for everyone except the sender.
+CREATE OR REPLACE FUNCTION public.chat_msgs_update_chats() RETURNS trigger
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = '' AS $$
+BEGIN
+    UPDATE public.chats_list
+    SET last_msg_time = GREATEST(last_msg_time, new.msg_time),
+        unread_count = unread_count + CASE WHEN user_id = new.sender_uid THEN 0 ELSE 1 END
+    WHERE chat_id = new.chat_id;
+    RETURN new;
+END $$;
+CREATE OR REPLACE TRIGGER trg_chat_msgs_update_chats AFTER INSERT ON chat_msgs
+    FOR EACH ROW EXECUTE FUNCTION public.chat_msgs_update_chats();
+
+-- New rows start with nothing unread, whatever the insert says (findOrCreateChat
+-- inserts the other person's row too), and with the chat's current newest
+-- message time, so someone joining an event chat that already has messages
+-- sees it in their list.
+CREATE OR REPLACE FUNCTION public.chats_list_init_counts() RETURNS trigger
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = '' AS $$
+BEGIN
+    new.unread_count := 0;
+    new.last_msg_time := (SELECT max(m.msg_time) FROM public.chat_msgs m WHERE m.chat_id = new.chat_id);
+    RETURN new;
+END $$;
+CREATE OR REPLACE TRIGGER trg_chats_list_init_counts BEFORE INSERT ON chats_list
+    FOR EACH ROW EXECUTE FUNCTION public.chats_list_init_counts();
+
+-- Marks one of the calling user's chats as read. The app calls it every time
+-- the open chat updates, so it only writes when something was unread, and
+-- returns whether it did.
+CREATE OR REPLACE FUNCTION public.mark_chat_read(target_chat TEXT) RETURNS boolean
+LANGUAGE sql SECURITY DEFINER SET search_path = '' AS $$
+    WITH cleared AS (
+        UPDATE public.chats_list SET unread_count = 0
+        WHERE chat_id = target_chat AND user_id = (SELECT auth.uid())::text AND unread_count <> 0
+        RETURNING 1
+    )
+    SELECT EXISTS (SELECT 1 FROM cleared);
+$$;
+REVOKE EXECUTE ON FUNCTION public.mark_chat_read(TEXT) FROM public, anon;
+GRANT EXECUTE ON FUNCTION public.mark_chat_read(TEXT) TO authenticated;
 
 -- #region Notifications
 -- Types:
@@ -421,7 +491,7 @@ CREATE INDEX idx_events_start_time ON events(start_time);
 CREATE INDEX idx_events_organizer ON events(organizer_uid);
 CREATE INDEX idx_comments_event ON event_comments(event_id, comment_time);
 CREATE INDEX idx_joined_joiner ON joined_events(joiner_uid);
-CREATE INDEX idx_chats_user ON chats_list(user_id);
+CREATE INDEX idx_chats_user ON chats_list(user_id, last_msg_time);
 CREATE INDEX idx_msgs_chat ON chat_msgs(chat_id, msg_time);
 
 -- #region Row level security
@@ -509,9 +579,13 @@ GRANT UPDATE (chat_name) ON chats_list TO authenticated;
 -- The messages popup listens for new chat_msgs rows through Supabase Realtime
 -- (subscribeToMessages() in src/api.jsx), so messages show up live. Realtime
 -- checks msgs_read for each row, so people only get messages from their own
--- chats. Nothing else needs live updates (the popup still polls slowly for
--- renames and membership changes), so only chat_msgs is published. Safe to
--- run again.
+-- chats. The unread badges re-fetch on those same events (the counts are
+-- updated in the message's own transaction), so chats_list doesn't need
+-- publishing. Don't publish it: Realtime skips RLS for DELETE events, so
+-- every subscriber would see the (chat_id, user_id) of each row removed, like
+-- who left which event. Nothing else needs live updates (the popup still polls
+-- slowly for renames, membership changes, and reads on other devices), so only
+-- chat_msgs is published. Safe to run again.
 DO $$
 BEGIN
     IF NOT EXISTS (

@@ -1,11 +1,21 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
-import { CHAT_NAME_MAX, MESSAGE_MAX, getChat, listChats, listMessages, renameChat, sendMessage } from '../api.jsx'
+import {
+  CHAT_NAME_MAX,
+  MESSAGE_MAX,
+  getChat,
+  listChats,
+  listMessages,
+  listUnreadChats,
+  markChatRead,
+  renameChat,
+  sendMessage,
+} from '../api.jsx'
 import { OPEN_CHAT_EVENT } from '../utils/chat_events.js'
 import { chatTitle, defaultChatTitle, displayName, formatTimestamp } from '../utils/format.js'
 import { eventPath } from '../utils/routes.js'
 import { useDismiss } from '../utils/use_dismiss.js'
 import { useLiveChat } from '../utils/use_live_chat.js'
-import { ConnectionBanner, ErrorMessage, PopupNote, inputClass, popupPanelClass } from './ui.jsx'
+import { ConnectionBanner, CountBadge, ErrorMessage, PopupNote, inputClass, popupPanelClass } from './ui.jsx'
 import UserName from './UserName.jsx'
 
 // The chat list's tabs: direct chats, and event chats (`event_id` set).
@@ -16,8 +26,22 @@ const TABS = [
 
 const tabForChat = (chatId) => (chatId?.startsWith('event:') ? 'event' : 'direct')
 
-// Tab buttons for the chat list. Arrow keys move between tabs.
-function ChatTabs({ tab, onChange, idPrefix }) {
+// While Realtime is down, the button's unread count polls as often as the bell.
+const BADGE_POLL_MS = 5000
+
+// Unread messages per tab ({ direct, event }) for chat rows with `event_id`
+// and `unread_count`.
+function unreadByTab(chats) {
+  const totals = { direct: 0, event: 0 }
+  for (const chat of chats ?? []) totals[chat.event_id ? 'event' : 'direct'] += chat.unread_count
+  return totals
+}
+
+const unreadLabel = (count) => `${count} unread`
+
+// Tab buttons for the chat list, each with its unread count. Arrow keys move
+// between tabs.
+function ChatTabs({ tab, onChange, idPrefix, unread }) {
   const handleKeyDown = (event) => {
     if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
     event.preventDefault()
@@ -41,11 +65,13 @@ function ChatTabs({ tab, onChange, idPrefix }) {
             aria-controls={`${idPrefix}-panel`}
             tabIndex={selected ? 0 : -1}
             onClick={() => onChange(t.id)}
-            className={`-mb-px flex-1 border-b-2 px-4 py-3.5 font-bold ${
+            className={`-mb-px flex flex-1 items-center justify-center gap-2 border-b-2 px-4 py-3.5 font-bold ${
               selected ? 'border-brand-500 text-ink' : 'border-transparent text-muted hover:bg-brand-50 hover:text-ink'
             }`}
           >
             {t.label}
+            <CountBadge count={unread[t.id]} />
+            {unread[t.id] > 0 && <span className="sr-only">, {unreadLabel(unread[t.id])}</span>}
           </button>
         )
       })}
@@ -53,12 +79,13 @@ function ChatTabs({ tab, onChange, idPrefix }) {
   )
 }
 
-// Direct chats and event chats come in one request; the tabs split them. A new
-// message in any of the user's chats re-fetches the list.
+// Direct chats and event chats come in one request, most recent first; the
+// tabs split them. A new message in any of the user's chats re-fetches the list.
 function ChatList({ profile, tab, onTabChange, onSelect }) {
   const load = useCallback(() => listChats(profile.uid), [profile.uid])
   const { data: allChats, failed } = useLiveChat(load)
   const chats = allChats?.filter((chat) => (tab === 'event') === Boolean(chat.event_id)) ?? null
+  const unread = unreadByTab(allChats)
   const idPrefix = useId()
 
   // "You: …" for your own message; in an event chat, the sender's name.
@@ -69,37 +96,47 @@ function ChatList({ profile, tab, onTabChange, onSelect }) {
 
   return (
     <>
-      <ChatTabs tab={tab} onChange={onTabChange} idPrefix={idPrefix} />
+      <ChatTabs tab={tab} onChange={onTabChange} idPrefix={idPrefix} unread={unread} />
       <ConnectionBanner show={failed} />
       <div role="tabpanel" id={`${idPrefix}-panel`} aria-labelledby={`${idPrefix}-tab-${tab}`} className="min-h-0 flex-1 overflow-y-auto">
         {chats === null && !failed && <PopupNote>Loading…</PopupNote>}
         {chats?.length === 0 && <PopupNote>{TABS.find((t) => t.id === tab).empty}</PopupNote>}
         {chats?.length > 0 && (
           <ul className="divide-y divide-line">
-            {chats.map((chat) => (
-              <li key={chat.chat_id}>
-                <button type="button" onClick={() => onSelect(chat.chat_id)} className="w-full px-5 py-3 text-left hover:bg-brand-50">
-                  <span className="flex items-baseline justify-between gap-3">
-                    <span className="truncate font-semibold text-ink">
-                      {chat.event_id && <span aria-hidden="true">👥 </span>}
-                      {chatTitle(chat)}
+            {chats.map((chat) => {
+              const hasUnread = chat.unread_count > 0
+              return (
+                <li key={chat.chat_id}>
+                  <button type="button" onClick={() => onSelect(chat.chat_id)} className="w-full px-5 py-3 text-left hover:bg-brand-50">
+                    <span className="flex items-baseline justify-between gap-3">
+                      <span className={`truncate text-ink ${hasUnread ? 'font-bold' : 'font-semibold'}`}>
+                        {chat.event_id && <span aria-hidden="true">👥 </span>}
+                        {chatTitle(chat)}
+                      </span>
+                      <span className={`shrink-0 text-xs ${hasUnread ? 'font-semibold text-brand-600' : 'text-muted'}`}>
+                        {formatTimestamp(chat.last_msg_time)}
+                      </span>
                     </span>
-                    <span className="shrink-0 text-xs text-muted">{formatTimestamp(chat.latest.msg_time)}</span>
-                  </span>
-                  {/* A labeled chat names the person or event under the label.
-                      Unlabeled, the title is already that name. */}
-                  {chat.chat_name && (
-                    <span className="block truncate text-xs text-muted">
-                      {chat.event_id ? defaultChatTitle(chat) : displayName(chat.other)}
+                    {/* A labeled chat names the person or event under the label.
+                        Unlabeled, the title is already that name. */}
+                    {chat.chat_name && (
+                      <span className="block truncate text-xs text-muted">
+                        {chat.event_id ? defaultChatTitle(chat) : displayName(chat.other)}
+                      </span>
+                    )}
+                    {/* Like WhatsApp: the unread count sits right of the preview, under the time. */}
+                    <span className="mt-0.5 flex items-center justify-between gap-3">
+                      <span className={`truncate text-sm ${hasUnread ? 'text-ink' : 'text-muted'}`}>
+                        {senderPrefix(chat)}
+                        {chat.latest.msg_content}
+                      </span>
+                      <CountBadge count={chat.unread_count} />
+                      {hasUnread && <span className="sr-only">, {unreadLabel(chat.unread_count)}</span>}
                     </span>
-                  )}
-                  <span className="mt-0.5 block truncate text-sm text-muted">
-                    {senderPrefix(chat)}
-                    {chat.latest.msg_content}
-                  </span>
-                </button>
-              </li>
-            ))}
+                  </button>
+                </li>
+              )
+            })}
           </ul>
         )}
       </div>
@@ -328,17 +365,33 @@ function ChatNameEditor({ chat, uid, onDone }) {
 // One chat. A direct chat shows the other person (`onLeave` closes the popup
 // when their name opens their profile). A group chat links its title to the
 // event and shows who sent each message; leaving the event removes you, so the
-// chat then shows a note instead.
-function ChatView({ chatId, uid, onBack, onLeave }) {
+// chat then shows a note instead. Every update marks the chat as read while
+// the browser tab is visible (and again when it comes back into view);
+// `onRead` runs when that cleared something, to update the button's count.
+function ChatView({ chatId, uid, onBack, onLeave, onRead }) {
   const load = useCallback(async () => {
     const [chat, messages] = await Promise.all([getChat(chatId, uid), listMessages(chatId)])
     return { chat, messages }
   }, [chatId, uid])
-  const { data, failed, refresh } = useLiveChat(load, chatId)
+  const { data, failed, refresh } = useLiveChat(load, { chatId })
   const chat = data?.chat
   const isGroup = Boolean(chat?.event_id)
   const [editing, setEditing] = useState(false)
   const editButtonRef = useRef(null)
+
+  // `data` is a new object after every fetch, so this runs on every update.
+  // A failed call just leaves the chat unread until the next update.
+  const isMember = Boolean(chat)
+  useEffect(() => {
+    if (!isMember) return
+    const markRead = () => {
+      if (document.visibilityState !== 'visible') return
+      markChatRead(chatId).then((changed) => changed && onRead(), () => {})
+    }
+    markRead()
+    document.addEventListener('visibilitychange', markRead)
+    return () => document.removeEventListener('visibilitychange', markRead)
+  }, [data, isMember, chatId, onRead])
 
   // After a save, wait for the new name to load so the old one doesn't flash
   // back. Focus returns to the edit button either way.
@@ -380,15 +433,25 @@ function ChatView({ chatId, uid, onBack, onLeave }) {
   )
 }
 
-// Menu bar button and its popup: the chat list, or one open chat (direct or
-// event). Live updates and polling only run while the popup is open. The tab is kept here so
-// going back from a chat returns to the tab it belongs to.
+// Menu bar button with the unread count, and its popup: the chat list, or one
+// open chat (direct or event). The count stays live the whole time you're
+// logged in; the list and chats only load while the popup is open. The tab is
+// kept here so going back from a chat returns to the tab it belongs to.
 export default function MessagesPopup({ profile }) {
   const [open, setOpen] = useState(false)
   const [chatId, setChatId] = useState(null)
   const [tab, setTab] = useState('direct')
   const ref = useRef(null)
   useDismiss(open, setOpen, ref)
+
+  const loadUnread = useCallback(() => listUnreadChats(profile.uid), [profile.uid])
+  const { data: unreadChats, refresh: refreshUnread } = useLiveChat(loadUnread, { pollMs: BADGE_POLL_MS })
+  // The open chat is being read, so a message arriving in it doesn't flash the
+  // count before ChatView marks it read.
+  const viewing = open ? chatId : null
+  const unreadTotal = (unreadChats ?? [])
+    .filter((chat) => chat.chat_id !== viewing)
+    .reduce((sum, chat) => sum + chat.unread_count, 0)
 
   useEffect(() => {
     const onOpenChat = (event) => {
@@ -405,16 +468,24 @@ export default function MessagesPopup({ profile }) {
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
-        aria-label="Messages"
+        aria-label={unreadTotal > 0 ? `Messages, ${unreadLabel(unreadTotal)}` : 'Messages'}
         aria-expanded={open}
-        className="flex h-10 w-10 items-center justify-center rounded-xl border border-line bg-surface text-lg hover:bg-brand-50"
+        className="relative flex h-10 w-10 items-center justify-center rounded-xl border border-line bg-surface text-lg hover:bg-brand-50"
       >
         <span aria-hidden="true">💬</span>
+        <CountBadge count={unreadTotal} className="absolute -right-1.5 -top-1.5" />
       </button>
       {open && (
         <div role="dialog" aria-label="Messages" className={popupPanelClass}>
           {chatId ? (
-            <ChatView key={chatId} chatId={chatId} uid={profile.uid} onBack={() => setChatId(null)} onLeave={() => setOpen(false)} />
+            <ChatView
+              key={chatId}
+              chatId={chatId}
+              uid={profile.uid}
+              onBack={() => setChatId(null)}
+              onLeave={() => setOpen(false)}
+              onRead={refreshUnread}
+            />
           ) : (
             <ChatList profile={profile} tab={tab} onTabChange={setTab} onSelect={setChatId} />
           )}
