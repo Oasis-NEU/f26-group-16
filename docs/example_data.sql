@@ -71,6 +71,7 @@ IF to_regclass('public._example_images') IS NOT NULL THEN
     UPDATE users as target
     SET profile_pic_data = source.image_data
     FROM _example_images AS source
-    WHERE target.uid = example_user_2 AND source.item_id = 'user2@example.com';
+    WHERE target.uid = example_user AND source.item_id = 'user@example.com'
+    OR target.uid = example_user_2 AND source.item_id = 'user2@example.com';
 END IF;
 END $$;
