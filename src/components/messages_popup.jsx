@@ -1,21 +1,155 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { MESSAGE_MAX, getChat, listChats, listMessages, sendMessage } from '../api.jsx'
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
+import {
+  CHAT_NAME_MAX,
+  MESSAGE_MAX,
+  getChat,
+  getUsers,
+  listChats,
+  listMessages,
+  listUnreadChats,
+  markAllChatsRead,
+  markChatRead,
+  renameChat,
+  sendMessage,
+} from '../api.jsx'
 import { OPEN_CHAT_EVENT } from '../utils/chat_events.js'
-import { displayName, formatTimestamp } from '../utils/format.js'
-import { eventPath } from '../utils/routes.js'
+import { chatTitle, defaultChatTitle, displayName, formatTimestamp } from '../utils/format.js'
+import { eventPath, profilePath } from '../utils/routes.js'
 import { useDismiss } from '../utils/use_dismiss.js'
-import { usePolling } from '../utils/use_polling.js'
-import { ConnectionBanner, ErrorMessage, PopupNote, inputClass, popupPanelClass } from './ui.jsx'
+import { useLiveChat } from '../utils/use_live_chat.js'
+import { ConnectionBanner, CountBadge, ErrorMessage, PopupNote, inputClass, popupPanelClass } from './ui.jsx'
+import Avatar from './Avatar.jsx'
 import UserName from './UserName.jsx'
 
-const POLL_MS = 2000
+// The chat list's tabs: direct chats, and event chats (`event_id` set).
+const TABS = [
+  {
+    id: 'direct',
+    label: 'Messages',
+    markAllLabel: 'Mark all messages as read',
+    empty: 'No messages yet. Message an organizer, or someone going to an event.',
+  },
+  {
+    id: 'event',
+    label: 'Event chats',
+    markAllLabel: 'Mark all event chats as read',
+    empty: 'No event chats yet. Open the event chat of an event you joined or posted.',
+  },
+]
 
-// Direct chats and event group chats (`event_id` set) come in one list.
-function ChatList({ profile, onSelect }) {
+const tabForChat = (chatId) => (chatId?.startsWith('event:') ? 'event' : 'direct')
+
+// While Realtime is down, the button's unread count polls as often as the bell.
+const BADGE_POLL_MS = 5000
+
+// Unread messages per tab ({ direct, event }) for chat rows with `event_id`
+// and `unread_count`.
+function unreadByTab(chats) {
+  const totals = { direct: 0, event: 0 }
+  for (const chat of chats ?? []) totals[chat.event_id ? 'event' : 'direct'] += chat.unread_count
+  return totals
+}
+
+const unreadLabel = (count) => `${count} unread`
+
+// Tab buttons for the chat list, each with its unread count and, while it has
+// unread messages, a ✓ button that marks the whole tab as read. Arrow keys move
+// between tabs. The ✓ buttons sit over the right end of their tab but outside
+// the tablist, since a button can't go inside another button and a tablist may
+// only contain tabs.
+function ChatTabs({ tab, onChange, idPrefix, unread, onMarkAllRead, markingTab }) {
+  const handleKeyDown = (event) => {
+    if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
+    event.preventDefault()
+    const index = TABS.findIndex((t) => t.id === tab)
+    const next = TABS[(index + (event.key === 'ArrowRight' ? 1 : -1) + TABS.length) % TABS.length]
+    onChange(next.id)
+    document.getElementById(`${idPrefix}-tab-${next.id}`)?.focus()
+  }
+
+  return (
+    <div className="relative">
+      <div role="tablist" aria-label="Chats" onKeyDown={handleKeyDown} className="flex border-b border-line">
+        {TABS.map((t) => {
+          const selected = t.id === tab
+          const count = unread[t.id]
+          return (
+            <button
+              key={t.id}
+              type="button"
+              role="tab"
+              id={`${idPrefix}-tab-${t.id}`}
+              aria-selected={selected}
+              aria-controls={`${idPrefix}-panel`}
+              tabIndex={selected ? 0 : -1}
+              onClick={() => onChange(t.id)}
+              // Room on the right for the ✓ button. Smaller text below `sm`
+              // so "Event chats", "99+", and ✓ fit in half of a phone-wide popup.
+              className={`-mb-px flex min-w-0 flex-1 items-center justify-center gap-1.5 border-b-2 py-3.5 text-sm font-bold sm:text-base ${
+                count > 0 ? 'pl-3 pr-10' : 'px-4'
+              } ${selected ? 'border-brand-500 text-ink' : 'border-transparent text-muted hover:bg-brand-50 hover:text-ink'}`}
+            >
+              <span className="truncate">{t.label}</span>
+              <CountBadge count={count} />
+              {count > 0 && <span className="sr-only">, {unreadLabel(count)}</span>}
+            </button>
+          )
+        })}
+      </div>
+      <div className="pointer-events-none absolute inset-0 flex">
+        {TABS.map((t) => (
+          <div key={t.id} className="flex flex-1 items-center justify-end pr-2">
+            {unread[t.id] > 0 && (
+              <button
+                type="button"
+                onClick={(event) => onMarkAllRead(t.id, event.currentTarget)}
+                // aria-disabled rather than disabled, so focus stays on the button while it works
+                aria-disabled={markingTab === t.id}
+                aria-label={t.markAllLabel}
+                title={t.markAllLabel}
+                className="pointer-events-auto flex h-7 w-7 items-center justify-center rounded-lg text-sm font-bold text-success hover:bg-success-50 aria-disabled:cursor-not-allowed aria-disabled:opacity-60"
+              >
+                <span aria-hidden="true">✓</span>
+              </button>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+// Direct chats and event chats come in one request, most recent first; the
+// tabs split them. A new message in any of the user's chats re-fetches the list.
+// `onRead` runs after a tab is marked as read, to update the button's count.
+function ChatList({ profile, tab, onTabChange, onSelect, onRead }) {
   const load = useCallback(() => listChats(profile.uid), [profile.uid])
-  const { data: chats, failed } = usePolling(load, POLL_MS)
+  const { data: allChats, failed, refresh } = useLiveChat(load)
+  const chats = allChats?.filter((chat) => (tab === 'event') === Boolean(chat.event_id)) ?? null
+  const unread = unreadByTab(allChats)
+  const idPrefix = useId()
+  const [markingTab, setMarkingTab] = useState(null)
+  const [markError, setMarkError] = useState('')
 
-  // "You: …" for your own message; in a group, the sender's name.
+  // The ✓ button disappears once its tab is read, so focus moves to the
+  // selected tab instead of getting lost.
+  const markAllRead = async (tabId, button) => {
+    if (markingTab) return
+    setMarkingTab(tabId)
+    setMarkError('')
+    try {
+      await markAllChatsRead({ eventChats: tabId === 'event' })
+      await refresh()
+      onRead()
+      if (document.activeElement === button) document.getElementById(`${idPrefix}-tab-${tab}`)?.focus()
+    } catch (err) {
+      setMarkError(err.message)
+    } finally {
+      setMarkingTab(null)
+    }
+  }
+
+  // "You: …" for your own message; in an event chat, the sender's name.
   const senderPrefix = (chat) => {
     if (chat.latest.sender_uid === profile.uid) return 'You: '
     return chat.event_id ? `${displayName(chat.latest.sender)}: ` : ''
@@ -23,33 +157,59 @@ function ChatList({ profile, onSelect }) {
 
   return (
     <>
-      <h2 className="border-b border-line px-5 py-4 font-bold text-ink">Messages</h2>
+      <ChatTabs
+        tab={tab}
+        onChange={onTabChange}
+        idPrefix={idPrefix}
+        unread={unread}
+        onMarkAllRead={markAllRead}
+        markingTab={markingTab}
+      />
       <ConnectionBanner show={failed} />
-      <div className="min-h-0 flex-1 overflow-y-auto">
+      {markError && (
+        <div className="px-4 pt-3">
+          <ErrorMessage message={markError} />
+        </div>
+      )}
+      <div role="tabpanel" id={`${idPrefix}-panel`} aria-labelledby={`${idPrefix}-tab-${tab}`} className="min-h-0 flex-1 overflow-y-auto">
         {chats === null && !failed && <PopupNote>Loading…</PopupNote>}
-        {chats?.length === 0 && (
-          <PopupNote>No messages yet. Message an organizer, or open the group chat of an event you joined.</PopupNote>
-        )}
+        {chats?.length === 0 && <PopupNote>{TABS.find((t) => t.id === tab).empty}</PopupNote>}
         {chats?.length > 0 && (
           <ul className="divide-y divide-line">
-            {chats.map((chat) => (
-              <li key={chat.chat_id}>
-                <button type="button" onClick={() => onSelect(chat.chat_id)} className="w-full px-5 py-3 text-left hover:bg-brand-50">
-                  <span className="flex items-baseline justify-between gap-3">
-                    <span className="truncate font-semibold text-ink">
-                      {chat.event_id && <span aria-hidden="true">👥 </span>}
-                      {chat.chat_name}
+            {chats.map((chat) => {
+              const hasUnread = chat.unread_count > 0
+              return (
+                <li key={chat.chat_id}>
+                  <button type="button" onClick={() => onSelect(chat.chat_id)} className="w-full px-5 py-3 text-left hover:bg-brand-50">
+                    <span className="flex items-baseline justify-between gap-3">
+                      <span className={`truncate text-ink ${hasUnread ? 'font-bold' : 'font-semibold'}`}>
+                        {chat.event_id && <span aria-hidden="true">👥 </span>}
+                        {chatTitle(chat)}
+                      </span>
+                      <span className={`shrink-0 text-xs ${hasUnread ? 'font-semibold text-brand-600' : 'text-muted'}`}>
+                        {formatTimestamp(chat.last_msg_time)}
+                      </span>
                     </span>
-                    <span className="shrink-0 text-xs text-muted">{formatTimestamp(chat.latest.msg_time)}</span>
-                  </span>
-                  <span className="block truncate text-xs text-muted">{chat.event_id ? 'Group chat' : displayName(chat.other)}</span>
-                  <span className="mt-0.5 block truncate text-sm text-muted">
-                    {senderPrefix(chat)}
-                    {chat.latest.msg_content}
-                  </span>
-                </button>
-              </li>
-            ))}
+                    {/* A labeled chat names the person or event under the label.
+                        Unlabeled, the title is already that name. */}
+                    {chat.chat_name && (
+                      <span className="block truncate text-xs text-muted">
+                        {chat.event_id ? defaultChatTitle(chat) : displayName(chat.other)}
+                      </span>
+                    )}
+                    {/* Like WhatsApp: the unread count sits right of the preview, under the time. */}
+                    <span className="mt-0.5 flex items-center justify-between gap-3">
+                      <span className={`truncate text-sm ${hasUnread ? 'text-ink' : 'text-muted'}`}>
+                        {senderPrefix(chat)}
+                        {chat.latest.msg_content}
+                      </span>
+                      <CountBadge count={chat.unread_count} />
+                      {hasUnread && <span className="sr-only">, {unreadLabel(chat.unread_count)}</span>}
+                    </span>
+                  </button>
+                </li>
+              )
+            })}
           </ul>
         )}
       </div>
@@ -57,12 +217,54 @@ function ChatList({ profile, onSelect }) {
   )
 }
 
-// `showSenders` puts the sender's name over other people's messages (group chats).
-function MessageList({ messages, uid, showSenders = false }) {
+// Full `users` rows (with `profile_pic_data`) for the senders of `messages`,
+// by uid. Messages only carry the sender's name, because the chat re-fetches
+// up to 200 of them on every update and pictures would come along each time.
+// Instead each sender is fetched once while the chat is open; a failed fetch
+// is retried on the next update.
+function useSenderProfiles(messages, enabled) {
+  const [profiles, setProfiles] = useState({})
+  const requested = useRef(new Set())
+
+  useEffect(() => {
+    if (!enabled) return
+    const missing = [...new Set(messages.map((m) => m.sender_uid))].filter((id) => !requested.current.has(id))
+    if (missing.length === 0) return
+    missing.forEach((id) => requested.current.add(id))
+    getUsers(missing).then(
+      (users) => setProfiles((prev) => ({ ...prev, ...Object.fromEntries(users.map((user) => [user.uid, user])) })),
+      () => missing.forEach((id) => requested.current.delete(id)),
+    )
+  }, [messages, enabled])
+
+  return profiles
+}
+
+// The sender's picture next to their message, linking to their profile
+// (`onLeave` closes the popup). Deleted accounts get a plain 👤 with no link.
+function SenderAvatar({ user, onLeave }) {
+  const avatar = <Avatar user={user} className="h-8 w-8 text-xs" />
+  if (!user?.is_active) return avatar
+  return (
+    <a
+      href={profilePath(user.uid)}
+      onClick={onLeave}
+      aria-label={`${displayName(user)}’s profile`}
+      className="shrink-0 rounded-full hover:opacity-80"
+    >
+      {avatar}
+    </a>
+  )
+}
+
+// `showSenders` puts the sender's picture and name next to other people's
+// messages (group chats).
+function MessageList({ messages, uid, showSenders = false, onLeave }) {
   const listRef = useRef(null)
   // Follow new messages, unless the user has scrolled up to read older ones.
   const followRef = useRef(true)
   const lastId = messages.at(-1)?.msg_id
+  const profiles = useSenderProfiles(messages, showSenders)
 
   useLayoutEffect(() => {
     if (followRef.current && listRef.current) listRef.current.scrollTop = listRef.current.scrollHeight
@@ -78,11 +280,11 @@ function MessageList({ messages, uid, showSenders = false }) {
       {messages.length === 0 && <p className="py-4 text-center text-sm text-muted">Say hello to start the conversation.</p>}
       {messages.map((message) => {
         const mine = message.sender_uid === uid
-        return (
-          <div key={message.msg_id} className={`flex flex-col ${mine ? 'items-end' : 'items-start'}`}>
-            {showSenders && !mine && (
-              <span className="mb-1 text-xs font-semibold text-muted">{displayName(message.sender)}</span>
-            )}
+        const withSender = showSenders && !mine
+        const sender = profiles[message.sender_uid] ?? message.sender
+        const body = (
+          <div className={`flex min-w-0 flex-1 flex-col ${mine ? 'items-end' : 'items-start'}`}>
+            {withSender && <span className="mb-1 text-xs font-semibold text-muted">{displayName(sender)}</span>}
             <p
               className={`max-w-[85%] whitespace-pre-wrap break-words rounded-2xl px-3 py-2 text-sm ${
                 mine ? 'bg-brand-500 text-white' : 'bg-brand-100 text-ink'
@@ -91,6 +293,13 @@ function MessageList({ messages, uid, showSenders = false }) {
               {message.msg_content}
             </p>
             <span className="mt-1 text-xs text-muted">{formatTimestamp(message.msg_time)}</span>
+          </div>
+        )
+        if (!withSender) return <div key={message.msg_id} className="flex">{body}</div>
+        return (
+          <div key={message.msg_id} className="flex items-start gap-2">
+            <SenderAvatar user={sender} onLeave={onLeave} />
+            {body}
           </div>
         )
       })}
@@ -144,18 +353,175 @@ function MessageForm({ chatId, uid, onSent }) {
   )
 }
 
+const headerIconButton =
+  'flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-sm disabled:cursor-not-allowed disabled:opacity-60'
+
+// The open chat's title with a ✏️ button to relabel it. Whatever names the
+// person or event (their name, the event title) links to their profile or the
+// event page. Unlabeled, that name is the title: a direct chat has no line under
+// it, an event chat has "Event chat". Labeled, the label is the title and the
+// name moves under it ("Event chat · <event>" for event chats).
+function ChatHeading({ chat, onLeave, onEdit, editButtonRef }) {
+  const isGroup = Boolean(chat.event_id)
+  let title = chatTitle(chat)
+  let subtitle = null
+  if (isGroup) {
+    const eventLink = (
+      <a href={eventPath(chat.event_id)} onClick={onLeave} className="hover:underline">
+        {defaultChatTitle(chat)}
+      </a>
+    )
+    title = (
+      <>
+        <span aria-hidden="true">👥 </span>
+        {chat.chat_name || eventLink}
+      </>
+    )
+    subtitle = (
+      <p className="truncate text-xs text-muted">
+        Event chat
+        {chat.chat_name && (
+          <>
+            {' · '}
+            <span className="text-ink">{eventLink}</span>
+          </>
+        )}
+      </p>
+    )
+  } else if (!chat.chat_name) {
+    title = <UserName user={chat.other} onClick={onLeave} />
+  } else {
+    subtitle = (
+      <p className="truncate text-xs">
+        <UserName user={chat.other} onClick={onLeave} />
+      </p>
+    )
+  }
+
+  return (
+    <div className="min-w-0 flex-1">
+      <div className="flex min-w-0 items-center gap-1">
+        <h2 className="min-w-0 truncate font-bold text-ink">{title}</h2>
+        <button
+          ref={editButtonRef}
+          type="button"
+          onClick={onEdit}
+          aria-label="Rename chat"
+          title="Rename chat (only you see this)"
+          className={`${headerIconButton} text-muted hover:bg-brand-50`}
+        >
+          <span aria-hidden="true">✏️</span>
+        </button>
+      </div>
+      {subtitle}
+    </div>
+  )
+}
+
+// Text field for the user's own label, with save (✓) and cancel (✕). Saving a
+// blank field clears the label, so the chat goes back to its default name
+// (shown as the placeholder). Escape cancels without closing the popup.
+// `onDone(saved)` closes the editor.
+function ChatNameEditor({ chat, uid, onDone }) {
+  const [name, setName] = useState(chat.chat_name ?? '')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+
+  const handleSubmit = async (event) => {
+    event.preventDefault()
+    if (busy) return
+    setBusy(true)
+    setError('')
+    try {
+      await renameChat({ chatId: chat.chat_id, uid, chatName: name })
+      await onDone(true)
+    } catch (err) {
+      setError(err.message)
+      setBusy(false)
+    }
+  }
+
+  const handleKeyDown = (event) => {
+    if (event.key !== 'Escape') return
+    // Keep the popup's own Escape handler (useDismiss) from closing it.
+    event.stopPropagation()
+    if (!busy) onDone(false)
+  }
+
+  return (
+    <form onSubmit={handleSubmit} onKeyDown={handleKeyDown} className="min-w-0 flex-1 space-y-2">
+      <div className="flex items-center gap-1">
+        <input
+          value={name}
+          onChange={(event) => setName(event.target.value)}
+          maxLength={CHAT_NAME_MAX}
+          aria-label="Chat name"
+          placeholder={defaultChatTitle(chat)}
+          autoFocus
+          onFocus={(event) => event.target.select()}
+          className={`${inputClass} min-w-0 px-3 py-1.5 text-sm`}
+        />
+        <button
+          type="submit"
+          disabled={busy}
+          aria-label="Save chat name"
+          className={`${headerIconButton} border border-line bg-surface font-bold text-success hover:bg-success-50`}
+        >
+          <span aria-hidden="true">✓</span>
+        </button>
+        <button
+          type="button"
+          onClick={() => onDone(false)}
+          disabled={busy}
+          aria-label="Cancel renaming"
+          className={`${headerIconButton} border border-line bg-surface font-bold text-danger hover:bg-danger-50`}
+        >
+          <span aria-hidden="true">✕</span>
+        </button>
+      </div>
+      <ErrorMessage message={error} />
+    </form>
+  )
+}
+
 // One chat. A direct chat shows the other person (`onLeave` closes the popup
 // when their name opens their profile). A group chat links its title to the
 // event and shows who sent each message; leaving the event removes you, so the
-// chat then shows a note instead.
-function ChatView({ chatId, uid, onBack, onLeave }) {
+// chat then shows a note instead. Every update marks the chat as read while
+// the browser tab is visible (and again when it comes back into view);
+// `onRead` runs when that cleared something, to update the button's count.
+function ChatView({ chatId, uid, onBack, onLeave, onRead }) {
   const load = useCallback(async () => {
     const [chat, messages] = await Promise.all([getChat(chatId, uid), listMessages(chatId)])
     return { chat, messages }
   }, [chatId, uid])
-  const { data, failed, refresh } = usePolling(load, POLL_MS)
+  const { data, failed, refresh } = useLiveChat(load, { chatId })
   const chat = data?.chat
   const isGroup = Boolean(chat?.event_id)
+  const [editing, setEditing] = useState(false)
+  const editButtonRef = useRef(null)
+
+  // `data` is a new object after every fetch, so this runs on every update.
+  // A failed call just leaves the chat unread until the next update.
+  const isMember = Boolean(chat)
+  useEffect(() => {
+    if (!isMember) return
+    const markRead = () => {
+      if (document.visibilityState !== 'visible') return
+      markChatRead(chatId).then((changed) => changed && onRead(), () => {})
+    }
+    markRead()
+    document.addEventListener('visibilitychange', markRead)
+    return () => document.removeEventListener('visibilitychange', markRead)
+  }, [data, isMember, chatId, onRead])
+
+  // After a save, wait for the new name to load so the old one doesn't flash
+  // back. Focus returns to the edit button either way.
+  const finishEditing = async (saved) => {
+    if (saved) await refresh()
+    setEditing(false)
+    requestAnimationFrame(() => editButtonRef.current?.focus())
+  }
 
   return (
     <>
@@ -168,33 +534,17 @@ function ChatView({ chatId, uid, onBack, onLeave }) {
         >
           <span aria-hidden="true">←</span>
         </button>
-        {chat && (
-          <div className="min-w-0">
-            {isGroup ? (
-              <>
-                <h2 className="truncate font-bold text-ink">
-                  <a href={eventPath(chat.event_id)} onClick={onLeave} className="hover:underline">
-                    <span aria-hidden="true">👥 </span>
-                    {chat.chat_name}
-                  </a>
-                </h2>
-                <p className="truncate text-xs text-muted">Group chat · everyone who joined</p>
-              </>
-            ) : (
-              <>
-                <h2 className="truncate font-bold text-ink">{chat.chat_name}</h2>
-                <p className="truncate text-xs">
-                  <UserName user={chat.other} onClick={onLeave} />
-                </p>
-              </>
-            )}
-          </div>
-        )}
+        {chat &&
+          (editing ? (
+            <ChatNameEditor chat={chat} uid={uid} onDone={finishEditing} />
+          ) : (
+            <ChatHeading chat={chat} onLeave={onLeave} onEdit={() => setEditing(true)} editButtonRef={editButtonRef} />
+          ))}
       </div>
       <ConnectionBanner show={failed} />
       {!data && <div className="flex-1">{!failed && <PopupNote>Loading…</PopupNote>}</div>}
-      {data && !chat && <PopupNote>This chat isn’t available. Group chats are only for the organizer and people who joined.</PopupNote>}
-      {chat && <MessageList messages={data.messages} uid={uid} showSenders={isGroup} />}
+      {data && !chat && <PopupNote>This chat isn’t available. Event chats are only for the organizer and people who joined.</PopupNote>}
+      {chat && <MessageList messages={data.messages} uid={uid} showSenders={isGroup} onLeave={onLeave} />}
       {chat &&
         (isGroup || chat.other?.is_active ? (
           <MessageForm chatId={chatId} uid={uid} onSent={refresh} />
@@ -205,17 +555,30 @@ function ChatView({ chatId, uid, onBack, onLeave }) {
   )
 }
 
-// Menu bar button and its popup: the chat list, or one open chat (direct or
-// group). Polling only runs while the popup is open.
+// Menu bar button with the unread count, and its popup: the chat list, or one
+// open chat (direct or event). The count stays live the whole time you're
+// logged in; the list and chats only load while the popup is open. The tab is
+// kept here so going back from a chat returns to the tab it belongs to.
 export default function MessagesPopup({ profile }) {
   const [open, setOpen] = useState(false)
   const [chatId, setChatId] = useState(null)
+  const [tab, setTab] = useState('direct')
   const ref = useRef(null)
   useDismiss(open, setOpen, ref)
+
+  const loadUnread = useCallback(() => listUnreadChats(profile.uid), [profile.uid])
+  const { data: unreadChats, refresh: refreshUnread } = useLiveChat(loadUnread, { pollMs: BADGE_POLL_MS })
+  // The open chat is being read, so a message arriving in it doesn't flash the
+  // count before ChatView marks it read.
+  const viewing = open ? chatId : null
+  const unreadTotal = (unreadChats ?? [])
+    .filter((chat) => chat.chat_id !== viewing)
+    .reduce((sum, chat) => sum + chat.unread_count, 0)
 
   useEffect(() => {
     const onOpenChat = (event) => {
       setChatId(event.detail)
+      setTab(tabForChat(event.detail))
       setOpen(true)
     }
     window.addEventListener(OPEN_CHAT_EVENT, onOpenChat)
@@ -227,18 +590,26 @@ export default function MessagesPopup({ profile }) {
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
-        aria-label="Messages"
+        aria-label={unreadTotal > 0 ? `Messages, ${unreadLabel(unreadTotal)}` : 'Messages'}
         aria-expanded={open}
-        className="flex h-10 w-10 items-center justify-center rounded-xl border border-line bg-surface text-lg hover:bg-brand-50"
+        className="relative flex h-10 w-10 items-center justify-center rounded-xl border border-line bg-surface text-lg hover:bg-brand-50"
       >
         <span aria-hidden="true">💬</span>
+        <CountBadge count={unreadTotal} className="absolute -right-1.5 -top-1.5" />
       </button>
       {open && (
         <div role="dialog" aria-label="Messages" className={popupPanelClass}>
           {chatId ? (
-            <ChatView key={chatId} chatId={chatId} uid={profile.uid} onBack={() => setChatId(null)} onLeave={() => setOpen(false)} />
+            <ChatView
+              key={chatId}
+              chatId={chatId}
+              uid={profile.uid}
+              onBack={() => setChatId(null)}
+              onLeave={() => setOpen(false)}
+              onRead={refreshUnread}
+            />
           ) : (
-            <ChatList profile={profile} onSelect={setChatId} />
+            <ChatList profile={profile} tab={tab} onTabChange={setTab} onSelect={setChatId} onRead={refreshUnread} />
           )}
         </div>
       )}

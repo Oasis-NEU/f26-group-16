@@ -17,6 +17,19 @@ export function displayName(user) {
   return user?.is_active ? user.full_name : 'Deleted account'
 }
 
+// What a chat is called: the user's own label (`chat_name`), or by default the
+// event title for group chats and the other person's name for direct chats.
+// Takes rows from listChats() / getChat() in src/api.jsx.
+export function chatTitle(chat) {
+  if (chat.chat_name) return chat.chat_name
+  return chat.event_id ? (chat.event?.event_title ?? 'Event chat') : displayName(chat.other)
+}
+
+// The name a chat shows when it has no label (the text field's placeholder).
+export function defaultChatTitle(chat) {
+  return chatTitle({ ...chat, chat_name: null })
+}
+
 const timeFormat = new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' })
 
 function formatDay(date) {

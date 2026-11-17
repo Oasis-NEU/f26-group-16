@@ -211,11 +211,17 @@ CREATE OR REPLACE TRIGGER trg_check_capacity_not_below_joined BEFORE UPDATE OF m
 --   adding, changing, or removing them).
 CREATE TABLE chats_list(
     chat_id TEXT NOT NULL,
-    -- Defaults to event name; each user can set its own name for reference
-    -- (group chats always use the event title)
-    chat_name TEXT NOT NULL CHECK (char_length(btrim(chat_name)) BETWEEN 1 AND 100),
+    -- The user's own label for the chat, just for their reference. NULL (the
+    -- default) shows the other person's name, or the event title for group chats.
+    chat_name TEXT CHECK (char_length(btrim(chat_name)) BETWEEN 1 AND 100),
     user_id TEXT NOT NULL REFERENCES users(uid) ON UPDATE CASCADE,
     event_id TEXT REFERENCES events(event_id) ON DELETE CASCADE,
+    -- Messages from other people that this user hasn't seen yet. Kept by the
+    -- triggers under "Chat unread counts"; the app clears it with mark_chat_read().
+    unread_count INTEGER NOT NULL DEFAULT 0 CHECK (unread_count >= 0),
+    -- The newest msg_time in the chat, NULL until the first message. The chat
+    -- list sorts by it and leaves out chats where it's NULL.
+    last_msg_time BIGINT,
     CONSTRAINT uc_chat_user UNIQUE (chat_id, user_id),
     CONSTRAINT chk_group_chat_id CHECK (event_id IS NULL OR chat_id = 'event:' || event_id)
 );
@@ -232,32 +238,27 @@ CREATE TABLE chat_msgs(
 -- #region Event group chats
 -- Every event has a group chat in chats_list / chat_msgs. These triggers keep
 -- its members in step with the event: the organizer joins when the event is
--- posted, joiners are added and removed with joined_events, the name follows
--- the event title, and deleting the event deletes the chat. SECURITY DEFINER
--- because users can't write group chat rows themselves (see RLS below).
+-- posted, joiners are added and removed with joined_events, and deleting the
+-- event deletes the chat. Rows start with no label (chat_name NULL), so the app
+-- shows the event's current title. SECURITY DEFINER because users can't add or
+-- remove group chat rows themselves (see RLS below).
 
-CREATE OR REPLACE FUNCTION public.group_chat_add_organizer() RETURNS trigger
+-- Adds a user to the event's group chat. Trigger functions can't take
+-- parameters, so each trigger passes the name of the column holding the user's
+-- uid (TG_ARGV[0]): organizer_uid on events, joiner_uid on joined_events. Both
+-- tables have event_id.
+CREATE OR REPLACE FUNCTION public.group_chat_add_member() RETURNS trigger
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = '' AS $$
 BEGIN
-    INSERT INTO public.chats_list (chat_id, chat_name, user_id, event_id)
-    VALUES ('event:' || new.event_id, new.event_title, new.organizer_uid, new.event_id)
+    INSERT INTO public.chats_list (chat_id, user_id, event_id)
+    VALUES ('event:' || new.event_id, to_jsonb(new) ->> TG_ARGV[0], new.event_id)
     ON CONFLICT (chat_id, user_id) DO NOTHING;
     RETURN new;
 END $$;
 CREATE OR REPLACE TRIGGER trg_group_chat_add_organizer AFTER INSERT ON events
-    FOR EACH ROW EXECUTE FUNCTION public.group_chat_add_organizer();
-
-CREATE OR REPLACE FUNCTION public.group_chat_add_joiner() RETURNS trigger
-LANGUAGE plpgsql SECURITY DEFINER SET search_path = '' AS $$
-BEGIN
-    INSERT INTO public.chats_list (chat_id, chat_name, user_id, event_id)
-    SELECT 'event:' || e.event_id, e.event_title, new.joiner_uid, e.event_id
-    FROM public.events e WHERE e.event_id = new.event_id
-    ON CONFLICT (chat_id, user_id) DO NOTHING;
-    RETURN new;
-END $$;
+    FOR EACH ROW EXECUTE FUNCTION public.group_chat_add_member('organizer_uid');
 CREATE OR REPLACE TRIGGER trg_group_chat_add_joiner AFTER INSERT ON joined_events
-    FOR EACH ROW EXECUTE FUNCTION public.group_chat_add_joiner();
+    FOR EACH ROW EXECUTE FUNCTION public.group_chat_add_member('joiner_uid');
 
 -- The organizer stays in even if they leave their own event's join list.
 CREATE OR REPLACE FUNCTION public.group_chat_remove_joiner() RETURNS trigger
@@ -272,16 +273,6 @@ END $$;
 CREATE OR REPLACE TRIGGER trg_group_chat_remove_joiner AFTER DELETE ON joined_events
     FOR EACH ROW EXECUTE FUNCTION public.group_chat_remove_joiner();
 
-CREATE OR REPLACE FUNCTION public.group_chat_rename() RETURNS trigger
-LANGUAGE plpgsql SECURITY DEFINER SET search_path = '' AS $$
-BEGIN
-    UPDATE public.chats_list SET chat_name = new.event_title WHERE event_id = new.event_id;
-    RETURN new;
-END $$;
-CREATE OR REPLACE TRIGGER trg_group_chat_rename AFTER UPDATE OF event_title ON events
-    FOR EACH ROW WHEN (old.event_title IS DISTINCT FROM new.event_title)
-    EXECUTE FUNCTION public.group_chat_rename();
-
 -- chats_list rows go with the event (ON DELETE CASCADE); chat_msgs has no
 -- foreign key, so its messages are removed here.
 CREATE OR REPLACE FUNCTION public.group_chat_delete_messages() RETURNS trigger
@@ -292,6 +283,86 @@ BEGIN
 END $$;
 CREATE OR REPLACE TRIGGER trg_group_chat_delete_messages BEFORE DELETE ON events
     FOR EACH ROW EXECUTE FUNCTION public.group_chat_delete_messages();
+
+-- #region Chat unread counts
+-- Each chats_list row has the user's unread_count and the chat's
+-- last_msg_time. Only these triggers and mark_chat_read() change them: users
+-- can only update chat_name (see the GRANT below). All are SECURITY DEFINER
+-- because they write other people's rows or read messages before the user is
+-- a member.
+
+-- Messages sent from the app get the server's time, so nobody can backdate a
+-- message or pin a chat to the top of the list with a future one. Inserts
+-- from the SQL editor or the secret key (example data) keep their msg_time.
+CREATE OR REPLACE FUNCTION public.chat_msgs_set_time() RETURNS trigger
+LANGUAGE plpgsql SET search_path = '' AS $$
+BEGIN
+    IF current_user IN ('anon', 'authenticated') THEN
+        new.msg_time := extract(epoch FROM now())::bigint;
+    END IF;
+    RETURN new;
+END $$;
+CREATE OR REPLACE TRIGGER trg_chat_msgs_set_time BEFORE INSERT ON chat_msgs
+    FOR EACH ROW EXECUTE FUNCTION public.chat_msgs_set_time();
+
+-- A new message moves every member's last_msg_time up to the newest message
+-- time and adds one unread message for everyone except the sender.
+CREATE OR REPLACE FUNCTION public.chat_msgs_update_chats() RETURNS trigger
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = '' AS $$
+BEGIN
+    UPDATE public.chats_list
+    SET last_msg_time = GREATEST(last_msg_time, new.msg_time),
+        unread_count = unread_count + CASE WHEN user_id = new.sender_uid THEN 0 ELSE 1 END
+    WHERE chat_id = new.chat_id;
+    RETURN new;
+END $$;
+CREATE OR REPLACE TRIGGER trg_chat_msgs_update_chats AFTER INSERT ON chat_msgs
+    FOR EACH ROW EXECUTE FUNCTION public.chat_msgs_update_chats();
+
+-- New rows start with nothing unread, whatever the insert says (findOrCreateChat
+-- inserts the other person's row too), and with the chat's current newest
+-- message time, so someone joining an event chat that already has messages
+-- sees it in their list.
+CREATE OR REPLACE FUNCTION public.chats_list_init_counts() RETURNS trigger
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = '' AS $$
+BEGIN
+    new.unread_count := 0;
+    new.last_msg_time := (SELECT max(m.msg_time) FROM public.chat_msgs m WHERE m.chat_id = new.chat_id);
+    RETURN new;
+END $$;
+CREATE OR REPLACE TRIGGER trg_chats_list_init_counts BEFORE INSERT ON chats_list
+    FOR EACH ROW EXECUTE FUNCTION public.chats_list_init_counts();
+
+-- Marks one of the calling user's chats as read. The app calls it every time
+-- the open chat updates, so it only writes when something was unread, and
+-- returns whether it did.
+CREATE OR REPLACE FUNCTION public.mark_chat_read(target_chat TEXT) RETURNS boolean
+LANGUAGE sql SECURITY DEFINER SET search_path = '' AS $$
+    WITH cleared AS (
+        UPDATE public.chats_list SET unread_count = 0
+        WHERE chat_id = target_chat AND user_id = (SELECT auth.uid())::text AND unread_count <> 0
+        RETURNING 1
+    )
+    SELECT EXISTS (SELECT 1 FROM cleared);
+$$;
+REVOKE EXECUTE ON FUNCTION public.mark_chat_read(TEXT) FROM public, anon;
+GRANT EXECUTE ON FUNCTION public.mark_chat_read(TEXT) TO authenticated;
+
+-- Marks all of the calling user's event chats (event_chats true) or direct
+-- chats (false) as read, for the "mark all as read" button on each tab of the
+-- messages popup. Returns how many chats it cleared.
+CREATE OR REPLACE FUNCTION public.mark_all_chats_read(event_chats BOOLEAN) RETURNS integer
+LANGUAGE sql SECURITY DEFINER SET search_path = '' AS $$
+    WITH cleared AS (
+        UPDATE public.chats_list SET unread_count = 0
+        WHERE user_id = (SELECT auth.uid())::text AND unread_count <> 0
+            AND (event_id IS NOT NULL) = event_chats
+        RETURNING 1
+    )
+    SELECT count(*)::integer FROM cleared;
+$$;
+REVOKE EXECUTE ON FUNCTION public.mark_all_chats_read(BOOLEAN) FROM public, anon;
+GRANT EXECUTE ON FUNCTION public.mark_all_chats_read(BOOLEAN) TO authenticated;
 
 -- #region Notifications
 -- Types:
@@ -436,7 +507,7 @@ CREATE INDEX idx_events_start_time ON events(start_time);
 CREATE INDEX idx_events_organizer ON events(organizer_uid);
 CREATE INDEX idx_comments_event ON event_comments(event_id, comment_time);
 CREATE INDEX idx_joined_joiner ON joined_events(joiner_uid);
-CREATE INDEX idx_chats_user ON chats_list(user_id);
+CREATE INDEX idx_chats_user ON chats_list(user_id, last_msg_time);
 CREATE INDEX idx_msgs_chat ON chat_msgs(chat_id, msg_time);
 
 -- #region Row level security
@@ -493,9 +564,11 @@ CREATE POLICY chats_insert ON chats_list FOR INSERT TO authenticated
         event_id IS NULL AND chat_id NOT LIKE 'event:%'
         AND (user_id = (SELECT auth.uid())::text OR is_chat_member(chat_id))
     );
+-- Anyone can relabel their own row, direct or group. Only chat_name can change
+-- (see the GRANT below), so nobody can move their row into another chat.
 CREATE POLICY chats_update_own ON chats_list FOR UPDATE TO authenticated
-    USING (user_id = (SELECT auth.uid())::text AND event_id IS NULL)
-    WITH CHECK (user_id = (SELECT auth.uid())::text AND event_id IS NULL AND chat_id NOT LIKE 'event:%');
+    USING (user_id = (SELECT auth.uid())::text)
+    WITH CHECK (user_id = (SELECT auth.uid())::text);
 CREATE POLICY chats_delete_own ON chats_list FOR DELETE TO authenticated
     USING (user_id = (SELECT auth.uid())::text AND event_id IS NULL);
 
@@ -514,3 +587,35 @@ CREATE POLICY notifications_update_own ON notifications FOR UPDATE TO authentica
 -- Users can only mark notifications as read, not change what they say
 REVOKE UPDATE ON notifications FROM authenticated;
 GRANT UPDATE (is_read) ON notifications TO authenticated;
+-- Chat rows: users only change their own label
+REVOKE UPDATE ON chats_list FROM authenticated;
+GRANT UPDATE (chat_name) ON chats_list TO authenticated;
+
+-- #region Realtime
+-- The messages popup listens for new chat_msgs rows through Supabase Realtime
+-- (subscribeToMessages() in src/api.jsx), so messages show up live. Realtime
+-- checks msgs_read for each row, so people only get messages from their own
+-- chats. The unread badges re-fetch on those same events (the counts are
+-- updated in the message's own transaction), so chats_list doesn't need
+-- publishing. Don't publish it: Realtime skips RLS for DELETE events, so
+-- every subscriber would see the (chat_id, user_id) of each row removed, like
+-- who left which event. Nothing else needs live updates (the popup still polls
+-- slowly for renames, membership changes, and reads on other devices), so only
+-- chat_msgs is published. Safe to run again.
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_publication_tables
+        WHERE pubname = 'supabase_realtime' AND schemaname = 'public' AND tablename = 'chat_msgs'
+    ) THEN
+        ALTER PUBLICATION supabase_realtime ADD TABLE public.chat_msgs;
+    END IF;
+END $$;
+
+-- joined_events and chats_list have no primary key. If either is ever added to
+-- a publication (e.g. by turning on Realtime for every table in the
+-- dashboard), Postgres rejects its UPDATEs and DELETEs ("does not have a
+-- replica identity"), which breaks leaving events and renaming chats. Their
+-- unique constraints identify each row instead.
+ALTER TABLE joined_events REPLICA IDENTITY USING INDEX uc_event_joiner;
+ALTER TABLE chats_list REPLICA IDENTITY USING INDEX uc_chat_user;

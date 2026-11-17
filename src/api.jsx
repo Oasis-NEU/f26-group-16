@@ -33,11 +33,13 @@ const USER_COLUMNS = 'uid, full_name, profile_pic_data, is_active'
 const EVENT_COLUMNS =
   '*, organizer:users(uid, full_name, is_active), category:event_categories(category_id, name), joined:joined_events(count)'
 
-// Comment rows come with `sender` ({ uid, full_name, is_active }) attached.
-const COMMENT_COLUMNS = '*, sender:users(uid, full_name, is_active)'
+// Comment rows come with `sender` ({ uid, full_name, profile_pic_data, is_active })
+// attached, so comments can show the sender's picture with <Avatar>.
+const COMMENT_COLUMNS = `*, sender:users(${USER_COLUMNS})`
 
-// Newest messages a chat loads. The popup polls every 2 seconds, so this keeps
-// each fetch small however long the chat gets.
+// Newest messages a chat loads. The popup re-fetches on every new message (and
+// polls when Realtime is down), so this keeps each fetch small however long the
+// chat gets.
 const MESSAGE_FETCH_LIMIT = 200
 
 // Notification rows come with `actor` (who did it: { uid, full_name, is_active },
@@ -457,12 +459,22 @@ export async function deleteComment(commentId) {
 // ---------- chats (direct and event group) ----------
 // A chat has one chats_list row per participant, sharing a chat_id, and its
 // messages are in chat_msgs.
-// - Direct chats: two people, `event_id` null. Each row holds that user's own
-//   name for the chat.
+// - Direct chats: two people, `event_id` null.
 // - Event group chats: `event_id` set and chat_id "event:<event_id>"
 //   (groupChatId in src/utils/chat_events.js). Database triggers add the
 //   organizer and everyone who joins, and remove people who leave, so the app
-//   never writes these rows. See docs/main_schema.sql.
+//   never adds or removes these rows. See docs/main_schema.sql.
+// Each row's `chat_name` is that user's own label for the chat, or null to
+// show the other person's name / the event title (chatTitle() in
+// src/utils/format.js). renameChat() is the only change the app makes to a
+// group chat row.
+
+// Chat rows come with `event` ({ event_title }) attached for group chats, so an
+// unlabeled group chat can show the event's current title. `unread_count` is
+// how many messages from other people the user hasn't seen, and
+// `last_msg_time` the newest message's time (null with no messages). Database
+// triggers keep both; markChatRead() clears the count.
+const CHAT_COLUMNS = 'chat_id, chat_name, event_id, unread_count, last_msg_time, event:events(event_title)'
 
 // Messages come with `sender` attached, for names in group chats.
 const MESSAGE_COLUMNS = 'msg_id, msg_content, msg_time, sender_uid, sender:users(uid, full_name, is_active)'
@@ -481,12 +493,20 @@ async function otherParticipants(chatIds, uid) {
 }
 
 // The user's chats with the newest message (`latest`, with `sender`) attached,
-// most recently active first. Direct chats also get the other participant
-// (`other`); group chats have `event_id` set instead. Chats with no messages
-// are left out, so opening a chat doesn't show up for the other person until
-// something is sent. Opening it again finds the same chat.
+// most recently active first (by `last_msg_time`). Direct chats also get the
+// other participant (`other`); group chats have `event_id` set instead. Chats
+// with no messages are left out, so opening a chat doesn't show up for the
+// other person until something is sent. Opening it again finds the same chat.
 export async function listChats(uid) {
-  const chats = unwrap(await supabase.from('chats_list').select('chat_id, chat_name, event_id').eq('user_id', uid))
+  const chats = unwrap(
+    await supabase
+      .from('chats_list')
+      .select(CHAT_COLUMNS)
+      .eq('user_id', uid)
+      .not('last_msg_time', 'is', null)
+      .order('last_msg_time', { ascending: false })
+      .order('chat_id'),
+  )
   if (chats.length === 0) return []
   const directIds = chats.filter((chat) => !chat.event_id).map((chat) => chat.chat_id)
   const [others, latest] = await Promise.all([
@@ -509,7 +529,31 @@ export async function listChats(uid) {
   return chats
     .map((chat, i) => ({ ...chat, other: others.get(chat.chat_id) ?? null, latest: latest[i] }))
     .filter((chat) => chat.latest)
-    .sort((a, b) => b.latest.msg_time - a.latest.msg_time)
+}
+
+// Just the user's chats with unread messages ({ chat_id, event_id,
+// unread_count }), for the badge on the messages button. Small enough to run
+// the whole time the user is logged in.
+export async function listUnreadChats(uid) {
+  return unwrap(
+    await supabase.from('chats_list').select('chat_id, event_id, unread_count').eq('user_id', uid).gt('unread_count', 0),
+  )
+}
+
+// Marks one of the user's chats as read (unread_count 0). Called on every update
+// of the open chat; the database only writes when something was unread.
+// Returns whether anything changed, so callers only refresh badges then.
+export async function markChatRead(chatId) {
+  check(chatId, 'Chat is required.')
+  return unwrap(await supabase.rpc('mark_chat_read', { target_chat: chatId }))
+}
+
+// Marks all of the user's event chats (`eventChats` true) or direct chats
+// (false) as read, for the button on each tab of the chat list. Returns how
+// many chats it cleared.
+export async function markAllChatsRead({ eventChats }) {
+  check(typeof eventChats === 'boolean', 'Pick direct chats or event chats.')
+  return unwrap(await supabase.rpc('mark_all_chats_read', { event_chats: eventChats }))
 }
 
 // One of the user's chats (direct chats with `other` attached), or null if
@@ -518,7 +562,7 @@ export async function getChat(chatId, uid) {
   const chat = unwrap(
     await supabase
       .from('chats_list')
-      .select('chat_id, chat_name, event_id')
+      .select(CHAT_COLUMNS)
       .eq('chat_id', chatId)
       .eq('user_id', uid)
       .maybeSingle(),
@@ -552,11 +596,58 @@ export async function sendMessage({ chatId, senderUid, content }) {
   unwrap(await supabase.from('chat_msgs').insert({ chat_id: chatId, msg_content: text, sender_uid: senderUid }))
 }
 
+// Live updates through Supabase Realtime: calls `onMessage(row)` for each new
+// chat_msgs row (plain columns, no `sender`). Realtime checks the msgs_read
+// policy for each row, so only messages from the user's own chats arrive;
+// `chatId` narrows it to one chat. `onStatus(live)` says whether messages are
+// being delivered (it reconnects by itself after a drop). Returns a function
+// that unsubscribes.
+let messageChannelCount = 0
+export function subscribeToMessages({ chatId = null, onMessage, onStatus = () => {} }) {
+  let stopped = false
+  const report = (live) => {
+    if (!stopped) onStatus(live)
+  }
+  const filter = chatId ? { filter: `chat_id=eq.${chatId}` } : {}
+  const channel = supabase
+    // Unique names, so two subscriptions never share a channel
+    .channel(`chat-msgs-${++messageChannelCount}`)
+    .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'chat_msgs', ...filter }, (payload) => {
+      if (!stopped) onMessage(payload.new)
+    })
+    // SUBSCRIBED can come before the server is listening to the database (e.g.
+    // right after Realtime starts), so it only counts as live once the server
+    // confirms ("Subscribed to PostgreSQL"). It confirms again after reconnecting.
+    .on('system', {}, (message) => {
+      if (message.extension === 'postgres_changes') report(message.status === 'ok')
+    })
+    .subscribe((status) => {
+      if (status !== 'SUBSCRIBED') report(false)
+    })
+  return () => {
+    stopped = true
+    supabase.removeChannel(channel)
+  }
+}
+
+// Sets the user's own label for a chat (direct or group). A blank name clears
+// it (null), so the chat shows the other person's name or the event title.
+// Only the user's own row changes; the other participants keep their labels.
+export async function renameChat({ chatId, uid, chatName }) {
+  const name = chatName?.trim() || null
+  check(chatId && uid, 'Chat is required.')
+  check(!name || name.length <= CHAT_NAME_MAX, `Chat names must be ${CHAT_NAME_MAX} characters or less.`)
+  const rows = unwrap(
+    await supabase.from('chats_list').update({ chat_name: name }).eq('chat_id', chatId).eq('user_id', uid).select('chat_id'),
+  )
+  check(rows.length > 0, 'You’re not in this chat anymore.')
+}
+
 // Returns the id of the direct chat between the two users, creating it if
-// needed. `chatName` names a new chat for both of them. Only direct chats
-// count (`event_id` null): two people in the same event group chat still get
-// their own direct chat.
-export async function findOrCreateChat({ uid, otherUid, chatName }) {
+// needed. A new chat has no label (chat_name null) for either person. Only
+// direct chats count (`event_id` null): two people in the same event group
+// chat still get their own direct chat.
+export async function findOrCreateChat({ uid, otherUid }) {
   check(uid && otherUid, 'Both participants are required.')
   check(uid !== otherUid, 'You can’t message yourself.')
   const mine = unwrap(await supabase.from('chats_list').select('chat_id').eq('user_id', uid).is('event_id', null))
@@ -573,13 +664,10 @@ export async function findOrCreateChat({ uid, otherUid, chatName }) {
     if (shared.length > 0) return shared[0].chat_id
   }
 
-  const name = chatName?.trim() ?? ''
-  check(name, 'Chat name is required.')
-  check(name.length <= CHAT_NAME_MAX, `Chat names must be ${CHAT_NAME_MAX} characters or less.`)
   const chatId = crypto.randomUUID()
   // Your own row goes first: RLS only lets chat members add other participants.
-  unwrap(await supabase.from('chats_list').insert({ chat_id: chatId, chat_name: name, user_id: uid }))
-  const { error } = await supabase.from('chats_list').insert({ chat_id: chatId, chat_name: name, user_id: otherUid })
+  unwrap(await supabase.from('chats_list').insert({ chat_id: chatId, user_id: uid }))
+  const { error } = await supabase.from('chats_list').insert({ chat_id: chatId, user_id: otherUid })
   if (error) {
     await supabase.from('chats_list').delete().eq('chat_id', chatId).eq('user_id', uid)
     throw toError(error)

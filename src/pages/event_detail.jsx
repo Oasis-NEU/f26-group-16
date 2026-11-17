@@ -42,11 +42,11 @@ function useStartChat(profile) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
 
-  const startChat = async (otherUid, chatName) => {
+  const startChat = async (otherUid) => {
     setBusy(true)
     setError('')
     try {
-      openChat(await findOrCreateChat({ uid: profile.uid, otherUid, chatName }))
+      openChat(await findOrCreateChat({ uid: profile.uid, otherUid }))
     } catch (err) {
       setError(err.message)
     } finally {
@@ -136,9 +136,9 @@ function GuestListDialog({ open, onClose, joiners, profile, onMessage, messageDi
 
 // The first few people who joined, as name pills linking to their profiles,
 // with a button that opens the full list in a popup. Each person has a message
-// button; a new chat is named after this event.
+// button.
 // Reloads whenever `refreshKey` changes (after joining or leaving).
-function JoinerList({ eventId, eventTitle, profile, refreshKey, isOrganizer }) {
+function JoinerList({ eventId, profile, refreshKey, isOrganizer }) {
   const [state, setState] = useState(null)
   const [showAll, setShowAll] = useState(false)
   const { startChat, busy, error } = useStartChat(profile)
@@ -146,7 +146,7 @@ function JoinerList({ eventId, eventTitle, profile, refreshKey, isOrganizer }) {
   // The full list is a modal, which would cover the messages popup, so it closes first.
   const handleMessage = (user) => {
     setShowAll(false)
-    startChat(user.uid, eventTitle)
+    startChat(user.uid)
   }
 
   useEffect(() => {
@@ -362,7 +362,7 @@ function GroupChatButton({ eventId, profile, isOrganizer, refreshKey }) {
   if (!isOrganizer && !joined) return null
   return (
     <button type="button" onClick={() => openGroupChat(eventId)} className={`${secondaryButton} w-full`}>
-      <span aria-hidden="true">👥</span> Group chat
+      <span aria-hidden="true">👥</span> Event chat
     </button>
   )
 }
@@ -423,17 +423,16 @@ function CommentForm({ eventId, profile, replyingTo, onPosted, onCancel }) {
   )
 }
 
-// `onDelete` is set only on your own comments.
-function Comment({ comment, onReply, onDelete }) {
-  const initial = comment.sender?.is_active ? comment.sender.full_name.trim()[0]?.toUpperCase() : '?'
+// `onDelete` is set only on your own comments. `organizerUid` marks the
+// event organizer's comments with an "(Organizer)" label.
+function Comment({ comment, organizerUid, onReply, onDelete }) {
   return (
     <div className="flex gap-3">
-      <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-brand-100 text-sm font-bold text-brand-600" aria-hidden="true">
-        {initial}
-      </span>
+      <Avatar user={comment.sender} className="h-9 w-9 text-sm" />
       <div className="min-w-0 flex-1">
         <p className="text-sm">
           <UserName user={comment.sender} className="font-semibold" />
+          {comment.sender_uid === organizerUid && <span className="font-semibold text-brand-600"> (Organizer)</span>}
           <span className="text-muted"> · {formatTimestamp(comment.comment_time)}</span>
         </p>
         <p className="mt-1 whitespace-pre-line break-words text-ink">{comment.comment_content}</p>
@@ -457,7 +456,7 @@ function Comment({ comment, onReply, onDelete }) {
   )
 }
 
-function Comments({ eventId, profile }) {
+function Comments({ eventId, organizerUid, profile }) {
   const [result, setResult] = useState(null)
   const [retries, setRetries] = useState(0)
   // The main comment whose reply form is open.
@@ -533,7 +532,12 @@ function Comments({ eventId, profile }) {
         <ul className="space-y-6">
           {threads.map(({ main, replies }) => (
             <li key={main.comment_id} className="space-y-4 rounded-2xl border border-line bg-surface p-5 shadow-sm">
-              <Comment comment={main} onReply={() => setReplyTo(main.comment_id)} onDelete={deleteHandler(main)} />
+              <Comment
+                comment={main}
+                organizerUid={organizerUid}
+                onReply={() => setReplyTo(main.comment_id)}
+                onDelete={deleteHandler(main)}
+              />
               {(replies.length > 0 || replyTo === main.comment_id) && (
                 <div className="space-y-4 border-l-2 border-brand-100 pl-4 sm:ml-12">
                   {replies.map((reply) => (
@@ -541,6 +545,7 @@ function Comments({ eventId, profile }) {
                     <Comment
                       key={reply.comment_id}
                       comment={reply}
+                      organizerUid={organizerUid}
                       onReply={() => setReplyTo(main.comment_id)}
                       onDelete={deleteHandler(reply)}
                     />
@@ -687,7 +692,6 @@ export default function EventDetail({ eventId, profile }) {
           />
           <JoinerList
             eventId={event.event_id}
-            eventTitle={event.event_title}
             profile={profile}
             refreshKey={joinChanges}
             isOrganizer={isOrganizer}
@@ -697,7 +701,7 @@ export default function EventDetail({ eventId, profile }) {
             <div className="space-y-2">
               <button
                 type="button"
-                onClick={() => startChat(event.organizer_uid, event.event_title)}
+                onClick={() => startChat(event.organizer_uid)}
                 disabled={!organizerActive || dmBusy}
                 className={`${secondaryButton} w-full`}
               >
@@ -719,7 +723,7 @@ export default function EventDetail({ eventId, profile }) {
               <p className="text-muted">The organizer hasn’t added a description yet.</p>
             )}
           </section>
-          <Comments eventId={event.event_id} profile={profile} />
+          <Comments eventId={event.event_id} organizerUid={event.organizer_uid} profile={profile} />
         </div>
       </div>
     </article>

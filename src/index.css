@@ -11,6 +11,8 @@
   --color-line: #e5e5e5;
   --color-danger: #b42318;
   --color-danger-50: #fef3f2;
+  --color-success: #15803d;
+  --color-success-50: #f0fdf4;
 
   --color-brand-50: #fdf2f3;
   --color-brand-100: #fbdde0;
@@ -28,6 +30,8 @@
   --color-line: #342d2e;
   --color-danger: #fda29b;
   --color-danger-50: #2a1414;
+  --color-success: #6fdc95;
+  --color-success-50: #10251a;
 
   --color-brand-50: #2a1215;
   --color-brand-100: #3d171c;

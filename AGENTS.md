@@ -49,9 +49,10 @@ The platform is open to any campus event: study sessions, club meetings, open mi
     - With a headcount limit it reads "4/10 joined · 6 spots left". Once full, the button is disabled and says "Full" for people who haven't joined; people already in can still leave
     - The database rejects joins past the limit (`trg_check_event_capacity`), so a stale page can't overfill an event. If that happens, the page shows "Sorry, this event just filled up." and switches to Full
 - Comments with replies
+    - Each comment shows the sender's profile picture (or their initial) and name. The organizer's comments and replies get a red "(Organizer)" label after the name
     - Your own comments and replies have a "Delete" button next to "Reply". It asks first in a confirmation dialog; deleting a main comment also deletes its replies
 - "Direct message" button to contact the organizer
-- "👥 Group chat" button, shown only to the organizer and people who joined. It opens the event's group chat in the messages popup
+- "👥 Event chat" button, shown only to the organizer and people who joined. It opens the event's event chat in the messages popup
 - "Who's going" list of people who joined, each with a message button to chat with them directly (not shown for yourself or deleted accounts)
 - If viewing as the event creator, an "Edit event" button takes the place of the "Join event" button (the creator can't join their own event; the joined count still shows). It opens the "edit event" page allowing for modifications of these fields
     - The form has an optional "How many people?" field (headcount limit, at least 2; empty = no limit). When editing, a limit below the people already joined shows a red warning and the form can't be saved
@@ -95,16 +96,25 @@ The platform is open to any campus event: study sessions, club meetings, open mi
 
 ### Direct messages popup
 
-- List of messages displayed in a menu bar popup on homepage, displaying the chat name and most recent message for each entry
+- List of messages displayed in a menu bar popup on homepage, displaying the chat name and most recent message for each entry, most recent chat first (by `last_msg_time`)
+- Unread counts:
+    - The 💬 button has a badge with the total unread messages across all chats, like the bell. It stays live the whole time you're logged in (Realtime, or a 5-second poll while that's down). The chat you have open doesn't count toward it
+    - Each tab shows the unread total for its chats, and each chat in the list shows its own count on the right, under the time (like WhatsApp). Unread chats also get a bold title, red time, and darker preview
+    - Badges cap at "99+". Your own messages never count as unread
+    - A small ✓ button at the right end of each tab marks every chat in that tab as read (`markAllChatsRead()`). It only shows while the tab has unread messages
+    - While a chat is open, every update marks it as read (`markChatRead()`), as long as the browser tab is visible; coming back to the tab marks it read too
+    - Joining an event chat that already has messages starts at 0 unread
+- The chat list has two tabs at the top: "Messages" (direct chats, the default) and "Event chats". Left/right arrow keys switch tabs. Going back from an open chat returns to its tab, and opening a chat from another page (e.g. "Direct message" or "👥 Event chat") picks the matching tab
 - Each chat supports simple text messages, attempt to fetch latest messages every 2 seconds in the page
 - If couldn't connect to server, display a small banner in the popup saying so and retry connection as usual (every 2 seconds)
-- The popup has two views: the chat list, and one open chat with its messages and a text field. Polling only runs while the popup is open
+- The popup has two views: the chat list, and one open chat with its messages and a text field. The list and chats only load while the popup is open (only the button's unread count runs all the time)
 - The "Direct message" button on the detail page opens the popup on the chat with the organizer, creating it first if needed. The message buttons in the "Who's going" list do the same for that person
 - Chats with no messages don't appear in the list, for either person. Opening a chat doesn't notify the other person; they see it once a message is sent
-- Two users share one direct chat (being in the same event group chat doesn't count). A new chat is named after the event it started from, and later messages about other events go in the same chat
+- Two users share one direct chat (being in the same event chat doesn't count). Later messages about other events go in the same chat
+- Chat names: a ✏️ button next to the open chat's name turns it into a text field with save (green ✓) and cancel (red ✕) buttons on the right. The name is each person's own label, just for their reference; the other people in the chat keep theirs. With no label (the default for new chats), a direct chat shows the other person's name and an event chat shows the event's current title, and the text field's placeholder shows that name. Saving a blank field removes the label. Escape cancels. Without a label, the name is the title (linking to the person's profile or the event): a direct chat has nothing under it and an event chat has "Event chat". With a label, the label is the title and the name moves under it: the person's name for direct chats, "Event chat · <event>" for event chats. The chat list follows the same rule (without links), except it doesn't repeat "Event chat" since the tab already says so: unlabeled chats have nothing under the title, and labeled event chats show just the event name
 - Deleted accounts show as "Deleted account"; their chats stay readable, but the text field is replaced by a note that you can't reply
-- Event group chats: every event has one group chat. Members are the organizer plus everyone who joined, so joining adds you and leaving removes you right away (you then can't read it). They live in the same tables as direct chats (`chats_list` / `chat_msgs`) and show in the same list, named after the event with 👥 and "Group chat" under it; like direct chats, only ones with messages appear. In a group chat, other people's messages show the sender's name above them, and the header title links to the event. The list and chats poll every 2 seconds like direct chats
-- The popup is titled "Messages" since it holds both kinds. A group chat's `chat_id` is `event:<event_id>` (`groupChatId()` in `src/utils/chat_events.js`; open one from any page with `openGroupChat(eventId)`)
+- Event chats: every event has one event chat (called a "group chat" in the code and database). Members are the organizer plus everyone who joined, so joining adds you and leaving removes you right away (you then can't read it). They live in the same tables as direct chats (`chats_list` / `chat_msgs`) and show in the "Event chats" tab, with 👥 before the name; like direct chats, only ones with messages appear. In an event chat, other people's messages show the sender's profile picture to the left (linking to their profile and closing the popup; deleted accounts get a plain 👤 with no link) and their name above the message, and the event name in the header links to the event. The list and chats poll every 2 seconds like direct chats
+- An event chat's `chat_id` is `event:<event_id>` (`groupChatId()` in `src/utils/chat_events.js`; open one from any page with `openGroupChat(eventId)`)
 
 ### Notification inbox
 
@@ -129,7 +139,7 @@ The platform is open to any campus event: study sessions, club meetings, open mi
 
 - Website logo on the left
 - Navigation buttons for homepage, personal schedule, and user profile pages placed on the right
-- Direct messages popup button placed to the adjacent left of the navigation buttons
+- Direct messages popup button placed to the adjacent left of the navigation buttons, with an unread message badge
 - Notification inbox button placed to the adjacent left of the direct messages button
 - Theme button (☀️/🌙) placed to the adjacent left of the notification inbox button; it switches between light and dark mode. Below `md` it moves into the ☰ menu as a "Light mode" / "Dark mode" item
 
@@ -162,10 +172,17 @@ The platform is open to any campus event: study sessions, club meetings, open mi
 - Tables for direct messages
     - Create table for chat messages (message ID, message content, date, sender) labeled with its belonging chat ID
         - Fetch chat list: Query chats based on UID → Query participant UIDs based on chat ID
-    - Use another table for lists of chats (chat ID, UID, user-defined name/label, event ID); separate entries for each user
+    - Use another table for lists of chats (chat ID, UID, user-defined name/label, event ID, unread count, last message time); separate entries for each user
+        - `chat_name` is nullable: it's the user's own label, and NULL (the default) shows the other person's name or the event title (`chatTitle(chat)` in `src/utils/format.js`)
+        - `unread_count` (messages from others the user hasn't seen) and `last_msg_time` (the chat's newest `msg_time`, NULL with no messages) are kept by database code only:
+            - `trg_chat_msgs_update_chats`: each new message raises every member's `last_msg_time` to the newest message time and adds 1 to everyone's `unread_count` except the sender's
+            - `trg_chats_list_init_counts`: new rows always start at 0 unread with the chat's current newest message time, whatever the insert says (so joining an event chat with history still lists it, and nobody can plant a count on someone else's row)
+            - `mark_chat_read(chat_id)`: sets the caller's own count to 0, only writing when it wasn't 0. Returns whether it changed anything
+            - `mark_all_chats_read(event_chats)`: sets all of the caller's event chats (`true`) or direct chats (`false`) to 0. Returns how many it cleared
+        - `trg_chat_msgs_set_time` sets `msg_time` to the server's time for messages sent from the app, so nobody can backdate a message or pin a chat to the top. SQL editor and secret key inserts (e.g. example data) keep theirs
     - Event group chats use the same two tables: `chats_list.event_id` is set and `chat_id` is `'event:' || event_id` (direct chats have `event_id` NULL and a UUID `chat_id`)
-        - Group rows are managed only by database triggers: the organizer is added when the event is posted, joiners are added and removed with `joined_events`, `chat_name` follows the event title, and deleting the event deletes the chat and its messages
-        - RLS lets users insert, update, and delete only direct chat rows (`event_id` NULL and no `event:` chat id), so nobody can add themselves to a group. Reading and sending use the existing `is_chat_member()` rules
+        - Group rows are managed only by database triggers: the organizer is added when the event is posted, joiners are added and removed with `joined_events` (rows start with `chat_name` NULL), and deleting the event deletes the chat and its messages
+        - RLS lets users insert and delete only direct chat rows (`event_id` NULL and no `event:` chat id), so nobody can add themselves to a group. Users can update their own row in either kind of chat, but only the `chat_name` column (`GRANT UPDATE (chat_name)`), so nobody can move their row into another chat. Reading and sending use the existing `is_chat_member()` rules
 - Table for notifications
     - Notification ID, recipient UID, actor UID (who did it; NULL for reminders), event ID (NULL once the event is deleted), event title (saved so deleted events still have a name), type, details (JSON: the new time/place for `event_updated`), date, read flag
     - Rows are only created by database code: the `on_event_joined`, `on_event_updated`, and `on_event_deleted` triggers and the `create_due_reminders()` function. Users can read their own and change only `is_read`
@@ -174,7 +191,9 @@ All date and time values are represented using UNIX timestamps in seconds. Use a
 
 ### SQL Representation
 
-SQL representation of the database can be found in the `docs/main_schema.sql` file. Example data can be found in the `docs/example_data.sql` file. `docs/notifications.sql` adds notifications to a database that already has the rest of the schema, keeping its data.
+SQL representation of the database can be found in the `docs/main_schema.sql` file. Example data can be found in the `docs/example_data.sql` file.
+
+Only `chat_msgs` is published to Supabase Realtime. Don't publish `chats_list`: Realtime skips RLS for DELETE events, so every subscriber would see who left which event chat. The unread badges re-fetch on new `chat_msgs` events instead.
 
 ### Supabase Auth
 
@@ -247,11 +266,15 @@ Direct message functions in `src/api.jsx`:
 
 | Function | What it does |
 |---|---|
-| `listChats(uid)` | The user's direct and group chats that have messages, with `latest` (the newest message, with `sender`) attached, most recently active first. Direct chats also have `other` (the other participant); group chats have `event_id` |
+| `listChats(uid)` | The user's direct and group chats that have messages (`last_msg_time` set), with `unread_count` and `latest` (the newest message, with `sender`) attached, most recently active first. Direct chats also have `other` (the other participant); group chats have `event_id` and `event` (`{ event_title }`). Show the name with `chatTitle(chat)` |
 | `getChat(chatId, uid)` | One of the user's chats (direct chats with `other` attached), or `null` if they aren't in it |
+| `listUnreadChats(uid)` | The user's chats with unread messages (`{ chat_id, event_id, unread_count }`), for the 💬 button's badge |
+| `markChatRead(chatId)` | Sets the user's own `unread_count` for the chat to 0. Returns whether anything was unread |
+| `markAllChatsRead({ eventChats })` | Sets the user's `unread_count` to 0 for all their event chats (`eventChats` true) or direct chats (false). Returns how many chats it cleared |
 | `listMessages(chatId)` | A chat's newest 200 messages with `sender`, oldest first |
 | `sendMessage({ chatId, senderUid, content })` | Validates (1–2000 characters), then sends a message |
-| `findOrCreateChat({ uid, otherUid, chatName })` | Returns the id of the two users' direct chat (group chats don't count), creating it if needed. Adds your own `chats_list` row first, because RLS only lets chat members add other participants |
+| `renameChat({ chatId, uid, chatName })` | Sets the user's own label for a direct or group chat (at most 100 characters). A blank name sets it to null |
+| `findOrCreateChat({ uid, otherUid })` | Returns the id of the two users' direct chat (group chats don't count), creating it if needed with no label (`chat_name` null) for either person. Adds your own `chats_list` row first, because RLS only lets chat members add other participants |
 
 ## Stack
 
@@ -298,10 +321,10 @@ src/
     ConfirmDialog.jsx       # modal "are you sure?" popup for deleting things
     Logo.jsx                # SVG Husky logo that barks on hover
     menu_bar.jsx            # Top menu bar
-    messages_popup.jsx      # Messages button + popup: direct and group chat list, open chat, 2-second polling
+    messages_popup.jsx      # Messages button + unread badge + popup: direct and group chat list, open chat, live updates
     notifications_popup.jsx # Bell button + unread badge + notification list
     toaster.jsx             # Shows showToast() confirmations at the bottom of the screen
-    ui.jsx                  # shared button/input styles, ErrorMessage, Notice
+    ui.jsx                  # shared button/input styles, ErrorMessage, Notice, CountBadge
   utils/
     supabase.js             # Supabase client (only api.jsx imports it)
     routes.js               # hash routes: path builders, useRoute(), navigate()
@@ -310,6 +333,7 @@ src/
     chat_events.js          # openChat(chatId) / openGroupChat(eventId): opens the messages popup from any page
     use_dismiss.js          # useDismiss(): closes a popup on Escape or an outside click
     use_polling.js          # usePolling(): re-fetches data on a timer, keeps it through failures
+    use_live_chat.js        # useLiveChat(): usePolling() that also re-fetches on new messages (Supabase Realtime)
     toast.js                # showToast(message): confirms an action from any page
     theme.js                # useDarkMode(): light/dark switch, saved in localStorage as `numeet-theme`
     schedule.js             # schedule helpers: overlaps, conflicts, suggestions, block time labels
@@ -356,6 +380,7 @@ Colors come from tokens in `src/index.css`. **Never hard-code `slate-*`, `gray-*
 | `brand-700` | solid buttons, pressed states | `#8c111d` | same |
 | `brand-900` | darkest accent | `#5a0b13` | `#1f080b` |
 | `danger` / `danger-50` | errors, overlap warnings | `#b42318` / `#fef3f2` | `#fda29b` / `#2a1414` |
+| `success` / `success-50` | confirm/save icon buttons (e.g. the chat name ✓) | `#15803d` / `#f0fdf4` | `#6fdc95` / `#10251a` |
 
 Examples: `bg-page`, `bg-surface`, `text-ink`, `text-muted`, `border-line`, `bg-brand-500 hover:bg-brand-600`.
 
