@@ -504,3 +504,28 @@ GRANT UPDATE (is_read) ON notifications TO authenticated;
 -- Chat rows: users only change their own label
 REVOKE UPDATE ON chats_list FROM authenticated;
 GRANT UPDATE (chat_name) ON chats_list TO authenticated;
+
+-- #region Realtime
+-- The messages popup listens for new chat_msgs rows through Supabase Realtime
+-- (subscribeToMessages() in src/api.jsx), so messages show up live. Realtime
+-- checks msgs_read for each row, so people only get messages from their own
+-- chats. Nothing else needs live updates (the popup still polls slowly for
+-- renames and membership changes), so only chat_msgs is published. Safe to
+-- run again.
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_publication_tables
+        WHERE pubname = 'supabase_realtime' AND schemaname = 'public' AND tablename = 'chat_msgs'
+    ) THEN
+        ALTER PUBLICATION supabase_realtime ADD TABLE public.chat_msgs;
+    END IF;
+END $$;
+
+-- joined_events and chats_list have no primary key. If either is ever added to
+-- a publication (e.g. by turning on Realtime for every table in the
+-- dashboard), Postgres rejects its UPDATEs and DELETEs ("does not have a
+-- replica identity"), which breaks leaving events and renaming chats. Their
+-- unique constraints identify each row instead.
+ALTER TABLE joined_events REPLICA IDENTITY USING INDEX uc_event_joiner;
+ALTER TABLE chats_list REPLICA IDENTITY USING INDEX uc_chat_user;

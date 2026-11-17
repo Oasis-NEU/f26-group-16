@@ -4,11 +4,9 @@ import { OPEN_CHAT_EVENT } from '../utils/chat_events.js'
 import { chatTitle, defaultChatTitle, displayName, formatTimestamp } from '../utils/format.js'
 import { eventPath } from '../utils/routes.js'
 import { useDismiss } from '../utils/use_dismiss.js'
-import { usePolling } from '../utils/use_polling.js'
+import { useLiveChat } from '../utils/use_live_chat.js'
 import { ConnectionBanner, ErrorMessage, PopupNote, inputClass, popupPanelClass } from './ui.jsx'
 import UserName from './UserName.jsx'
-
-const POLL_MS = 2000
 
 // The chat list's tabs: direct chats, and event chats (`event_id` set).
 const TABS = [
@@ -55,10 +53,11 @@ function ChatTabs({ tab, onChange, idPrefix }) {
   )
 }
 
-// Direct chats and event chats come in one request; the tabs split them.
+// Direct chats and event chats come in one request; the tabs split them. A new
+// message in any of the user's chats re-fetches the list.
 function ChatList({ profile, tab, onTabChange, onSelect }) {
   const load = useCallback(() => listChats(profile.uid), [profile.uid])
-  const { data: allChats, failed } = usePolling(load, POLL_MS)
+  const { data: allChats, failed } = useLiveChat(load)
   const chats = allChats?.filter((chat) => (tab === 'event') === Boolean(chat.event_id)) ?? null
   const idPrefix = useId()
 
@@ -335,7 +334,7 @@ function ChatView({ chatId, uid, onBack, onLeave }) {
     const [chat, messages] = await Promise.all([getChat(chatId, uid), listMessages(chatId)])
     return { chat, messages }
   }, [chatId, uid])
-  const { data, failed, refresh } = usePolling(load, POLL_MS)
+  const { data, failed, refresh } = useLiveChat(load, chatId)
   const chat = data?.chat
   const isGroup = Boolean(chat?.event_id)
   const [editing, setEditing] = useState(false)
@@ -382,7 +381,7 @@ function ChatView({ chatId, uid, onBack, onLeave }) {
 }
 
 // Menu bar button and its popup: the chat list, or one open chat (direct or
-// event). Polling only runs while the popup is open. The tab is kept here so
+// event). Live updates and polling only run while the popup is open. The tab is kept here so
 // going back from a chat returns to the tab it belongs to.
 export default function MessagesPopup({ profile }) {
   const [open, setOpen] = useState(false)

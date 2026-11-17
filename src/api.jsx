@@ -36,8 +36,9 @@ const EVENT_COLUMNS =
 // Comment rows come with `sender` ({ uid, full_name, is_active }) attached.
 const COMMENT_COLUMNS = '*, sender:users(uid, full_name, is_active)'
 
-// Newest messages a chat loads. The popup polls every 2 seconds, so this keeps
-// each fetch small however long the chat gets.
+// Newest messages a chat loads. The popup re-fetches on every new message (and
+// polls when Realtime is down), so this keeps each fetch small however long the
+// chat gets.
 const MESSAGE_FETCH_LIMIT = 200
 
 // Notification rows come with `actor` (who did it: { uid, full_name, is_active },
@@ -557,6 +558,40 @@ export async function sendMessage({ chatId, senderUid, content }) {
   check(text.length <= MESSAGE_MAX, `Messages must be ${MESSAGE_MAX} characters or less.`)
   check(senderUid, 'Sender is required.')
   unwrap(await supabase.from('chat_msgs').insert({ chat_id: chatId, msg_content: text, sender_uid: senderUid }))
+}
+
+// Live updates through Supabase Realtime: calls `onMessage(row)` for each new
+// chat_msgs row (plain columns, no `sender`). Realtime checks the msgs_read
+// policy for each row, so only messages from the user's own chats arrive;
+// `chatId` narrows it to one chat. `onStatus(live)` says whether messages are
+// being delivered (it reconnects by itself after a drop). Returns a function
+// that unsubscribes.
+let messageChannelCount = 0
+export function subscribeToMessages({ chatId = null, onMessage, onStatus = () => {} }) {
+  let stopped = false
+  const report = (live) => {
+    if (!stopped) onStatus(live)
+  }
+  const filter = chatId ? { filter: `chat_id=eq.${chatId}` } : {}
+  const channel = supabase
+    // Unique names, so two subscriptions never share a channel
+    .channel(`chat-msgs-${++messageChannelCount}`)
+    .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'chat_msgs', ...filter }, (payload) => {
+      if (!stopped) onMessage(payload.new)
+    })
+    // SUBSCRIBED can come before the server is listening to the database (e.g.
+    // right after Realtime starts), so it only counts as live once the server
+    // confirms ("Subscribed to PostgreSQL"). It confirms again after reconnecting.
+    .on('system', {}, (message) => {
+      if (message.extension === 'postgres_changes') report(message.status === 'ok')
+    })
+    .subscribe((status) => {
+      if (status !== 'SUBSCRIBED') report(false)
+    })
+  return () => {
+    stopped = true
+    supabase.removeChannel(channel)
+  }
 }
 
 // Sets the user's own label for a chat (direct or group). A blank name clears
