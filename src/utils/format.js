@@ -22,7 +22,7 @@ export function displayName(user) {
 // Takes rows from listChats() / getChat() in src/api.jsx.
 export function chatTitle(chat) {
   if (chat.chat_name) return chat.chat_name
-  return chat.event_id ? (chat.event?.event_title ?? 'Group chat') : displayName(chat.other)
+  return chat.event_id ? (chat.event?.event_title ?? 'Event chat') : displayName(chat.other)
 }
 
 // The name a chat shows when it has no label (the text field's placeholder).

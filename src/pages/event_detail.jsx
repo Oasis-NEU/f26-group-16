@@ -362,7 +362,7 @@ function GroupChatButton({ eventId, profile, isOrganizer, refreshKey }) {
   if (!isOrganizer && !joined) return null
   return (
     <button type="button" onClick={() => openGroupChat(eventId)} className={`${secondaryButton} w-full`}>
-      <span aria-hidden="true">👥</span> Group chat
+      <span aria-hidden="true">👥</span> Event chat
     </button>
   )
 }
