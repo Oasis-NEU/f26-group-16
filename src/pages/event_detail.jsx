@@ -425,12 +425,9 @@ function CommentForm({ eventId, profile, replyingTo, onPosted, onCancel }) {
 
 // `onDelete` is set only on your own comments.
 function Comment({ comment, onReply, onDelete }) {
-  const initial = comment.sender?.is_active ? comment.sender.full_name.trim()[0]?.toUpperCase() : '?'
   return (
     <div className="flex gap-3">
-      <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-brand-100 text-sm font-bold text-brand-600" aria-hidden="true">
-        {initial}
-      </span>
+      <Avatar user={comment.sender} className="h-9 w-9 text-sm" />
       <div className="min-w-0 flex-1">
         <p className="text-sm">
           <UserName user={comment.sender} className="font-semibold" />

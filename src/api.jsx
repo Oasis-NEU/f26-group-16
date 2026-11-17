@@ -33,8 +33,9 @@ const USER_COLUMNS = 'uid, full_name, profile_pic_data, is_active'
 const EVENT_COLUMNS =
   '*, organizer:users(uid, full_name, is_active), category:event_categories(category_id, name), joined:joined_events(count)'
 
-// Comment rows come with `sender` ({ uid, full_name, is_active }) attached.
-const COMMENT_COLUMNS = '*, sender:users(uid, full_name, is_active)'
+// Comment rows come with `sender` ({ uid, full_name, profile_pic_data, is_active })
+// attached, so comments can show the sender's picture with <Avatar>.
+const COMMENT_COLUMNS = `*, sender:users(${USER_COLUMNS})`
 
 // Newest messages a chat loads. The popup re-fetches on every new message (and
 // polls when Realtime is down), so this keeps each fetch small however long the
