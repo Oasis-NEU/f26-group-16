@@ -348,6 +348,22 @@ $$;
 REVOKE EXECUTE ON FUNCTION public.mark_chat_read(TEXT) FROM public, anon;
 GRANT EXECUTE ON FUNCTION public.mark_chat_read(TEXT) TO authenticated;
 
+-- Marks all of the calling user's event chats (event_chats true) or direct
+-- chats (false) as read, for the "mark all as read" button on each tab of the
+-- messages popup. Returns how many chats it cleared.
+CREATE OR REPLACE FUNCTION public.mark_all_chats_read(event_chats BOOLEAN) RETURNS integer
+LANGUAGE sql SECURITY DEFINER SET search_path = '' AS $$
+    WITH cleared AS (
+        UPDATE public.chats_list SET unread_count = 0
+        WHERE user_id = (SELECT auth.uid())::text AND unread_count <> 0
+            AND (event_id IS NOT NULL) = event_chats
+        RETURNING 1
+    )
+    SELECT count(*)::integer FROM cleared;
+$$;
+REVOKE EXECUTE ON FUNCTION public.mark_all_chats_read(BOOLEAN) FROM public, anon;
+GRANT EXECUTE ON FUNCTION public.mark_all_chats_read(BOOLEAN) TO authenticated;
+
 -- #region Notifications
 -- Types:
 --   event_joined   someone joined your event (to the organizer)

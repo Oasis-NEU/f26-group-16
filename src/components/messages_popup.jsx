@@ -6,6 +6,7 @@ import {
   listChats,
   listMessages,
   listUnreadChats,
+  markAllChatsRead,
   markChatRead,
   renameChat,
   sendMessage,
@@ -20,8 +21,18 @@ import UserName from './UserName.jsx'
 
 // The chat list's tabs: direct chats, and event chats (`event_id` set).
 const TABS = [
-  { id: 'direct', label: 'Messages', empty: 'No messages yet. Message an organizer, or someone going to an event.' },
-  { id: 'event', label: 'Event chats', empty: 'No event chats yet. Open the event chat of an event you joined or posted.' },
+  {
+    id: 'direct',
+    label: 'Messages',
+    markAllLabel: 'Mark all messages as read',
+    empty: 'No messages yet. Message an organizer, or someone going to an event.',
+  },
+  {
+    id: 'event',
+    label: 'Event chats',
+    markAllLabel: 'Mark all event chats as read',
+    empty: 'No event chats yet. Open the event chat of an event you joined or posted.',
+  },
 ]
 
 const tabForChat = (chatId) => (chatId?.startsWith('event:') ? 'event' : 'direct')
@@ -39,9 +50,12 @@ function unreadByTab(chats) {
 
 const unreadLabel = (count) => `${count} unread`
 
-// Tab buttons for the chat list, each with its unread count. Arrow keys move
-// between tabs.
-function ChatTabs({ tab, onChange, idPrefix, unread }) {
+// Tab buttons for the chat list, each with its unread count and, while it has
+// unread messages, a ✓ button that marks the whole tab as read. Arrow keys move
+// between tabs. The ✓ buttons sit over the right end of their tab but outside
+// the tablist, since a button can't go inside another button and a tablist may
+// only contain tabs.
+function ChatTabs({ tab, onChange, idPrefix, unread, onMarkAllRead, markingTab }) {
   const handleKeyDown = (event) => {
     if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
     event.preventDefault()
@@ -52,41 +66,86 @@ function ChatTabs({ tab, onChange, idPrefix, unread }) {
   }
 
   return (
-    <div role="tablist" aria-label="Chats" onKeyDown={handleKeyDown} className="flex border-b border-line">
-      {TABS.map((t) => {
-        const selected = t.id === tab
-        return (
-          <button
-            key={t.id}
-            type="button"
-            role="tab"
-            id={`${idPrefix}-tab-${t.id}`}
-            aria-selected={selected}
-            aria-controls={`${idPrefix}-panel`}
-            tabIndex={selected ? 0 : -1}
-            onClick={() => onChange(t.id)}
-            className={`-mb-px flex flex-1 items-center justify-center gap-2 border-b-2 px-4 py-3.5 font-bold ${
-              selected ? 'border-brand-500 text-ink' : 'border-transparent text-muted hover:bg-brand-50 hover:text-ink'
-            }`}
-          >
-            {t.label}
-            <CountBadge count={unread[t.id]} />
-            {unread[t.id] > 0 && <span className="sr-only">, {unreadLabel(unread[t.id])}</span>}
-          </button>
-        )
-      })}
+    <div className="relative">
+      <div role="tablist" aria-label="Chats" onKeyDown={handleKeyDown} className="flex border-b border-line">
+        {TABS.map((t) => {
+          const selected = t.id === tab
+          const count = unread[t.id]
+          return (
+            <button
+              key={t.id}
+              type="button"
+              role="tab"
+              id={`${idPrefix}-tab-${t.id}`}
+              aria-selected={selected}
+              aria-controls={`${idPrefix}-panel`}
+              tabIndex={selected ? 0 : -1}
+              onClick={() => onChange(t.id)}
+              // Room on the right for the ✓ button. Smaller text below `sm`
+              // so "Event chats", "99+", and ✓ fit in half of a phone-wide popup.
+              className={`-mb-px flex min-w-0 flex-1 items-center justify-center gap-1.5 border-b-2 py-3.5 text-sm font-bold sm:text-base ${
+                count > 0 ? 'pl-3 pr-10' : 'px-4'
+              } ${selected ? 'border-brand-500 text-ink' : 'border-transparent text-muted hover:bg-brand-50 hover:text-ink'}`}
+            >
+              <span className="truncate">{t.label}</span>
+              <CountBadge count={count} />
+              {count > 0 && <span className="sr-only">, {unreadLabel(count)}</span>}
+            </button>
+          )
+        })}
+      </div>
+      <div className="pointer-events-none absolute inset-0 flex">
+        {TABS.map((t) => (
+          <div key={t.id} className="flex flex-1 items-center justify-end pr-2">
+            {unread[t.id] > 0 && (
+              <button
+                type="button"
+                onClick={(event) => onMarkAllRead(t.id, event.currentTarget)}
+                // aria-disabled rather than disabled, so focus stays on the button while it works
+                aria-disabled={markingTab === t.id}
+                aria-label={t.markAllLabel}
+                title={t.markAllLabel}
+                className="pointer-events-auto flex h-7 w-7 items-center justify-center rounded-lg text-sm font-bold text-success hover:bg-success-50 aria-disabled:cursor-not-allowed aria-disabled:opacity-60"
+              >
+                <span aria-hidden="true">✓</span>
+              </button>
+            )}
+          </div>
+        ))}
+      </div>
     </div>
   )
 }
 
 // Direct chats and event chats come in one request, most recent first; the
 // tabs split them. A new message in any of the user's chats re-fetches the list.
-function ChatList({ profile, tab, onTabChange, onSelect }) {
+// `onRead` runs after a tab is marked as read, to update the button's count.
+function ChatList({ profile, tab, onTabChange, onSelect, onRead }) {
   const load = useCallback(() => listChats(profile.uid), [profile.uid])
-  const { data: allChats, failed } = useLiveChat(load)
+  const { data: allChats, failed, refresh } = useLiveChat(load)
   const chats = allChats?.filter((chat) => (tab === 'event') === Boolean(chat.event_id)) ?? null
   const unread = unreadByTab(allChats)
   const idPrefix = useId()
+  const [markingTab, setMarkingTab] = useState(null)
+  const [markError, setMarkError] = useState('')
+
+  // The ✓ button disappears once its tab is read, so focus moves to the
+  // selected tab instead of getting lost.
+  const markAllRead = async (tabId, button) => {
+    if (markingTab) return
+    setMarkingTab(tabId)
+    setMarkError('')
+    try {
+      await markAllChatsRead({ eventChats: tabId === 'event' })
+      await refresh()
+      onRead()
+      if (document.activeElement === button) document.getElementById(`${idPrefix}-tab-${tab}`)?.focus()
+    } catch (err) {
+      setMarkError(err.message)
+    } finally {
+      setMarkingTab(null)
+    }
+  }
 
   // "You: …" for your own message; in an event chat, the sender's name.
   const senderPrefix = (chat) => {
@@ -96,8 +155,20 @@ function ChatList({ profile, tab, onTabChange, onSelect }) {
 
   return (
     <>
-      <ChatTabs tab={tab} onChange={onTabChange} idPrefix={idPrefix} unread={unread} />
+      <ChatTabs
+        tab={tab}
+        onChange={onTabChange}
+        idPrefix={idPrefix}
+        unread={unread}
+        onMarkAllRead={markAllRead}
+        markingTab={markingTab}
+      />
       <ConnectionBanner show={failed} />
+      {markError && (
+        <div className="px-4 pt-3">
+          <ErrorMessage message={markError} />
+        </div>
+      )}
       <div role="tabpanel" id={`${idPrefix}-panel`} aria-labelledby={`${idPrefix}-tab-${tab}`} className="min-h-0 flex-1 overflow-y-auto">
         {chats === null && !failed && <PopupNote>Loading…</PopupNote>}
         {chats?.length === 0 && <PopupNote>{TABS.find((t) => t.id === tab).empty}</PopupNote>}
@@ -487,7 +558,7 @@ export default function MessagesPopup({ profile }) {
               onRead={refreshUnread}
             />
           ) : (
-            <ChatList profile={profile} tab={tab} onTabChange={setTab} onSelect={setChatId} />
+            <ChatList profile={profile} tab={tab} onTabChange={setTab} onSelect={setChatId} onRead={refreshUnread} />
           )}
         </div>
       )}

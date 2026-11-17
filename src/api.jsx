@@ -547,6 +547,14 @@ export async function markChatRead(chatId) {
   return unwrap(await supabase.rpc('mark_chat_read', { target_chat: chatId }))
 }
 
+// Marks all of the user's event chats (`eventChats` true) or direct chats
+// (false) as read, for the button on each tab of the chat list. Returns how
+// many chats it cleared.
+export async function markAllChatsRead({ eventChats }) {
+  check(typeof eventChats === 'boolean', 'Pick direct chats or event chats.')
+  return unwrap(await supabase.rpc('mark_all_chats_read', { event_chats: eventChats }))
+}
+
 // One of the user's chats (direct chats with `other` attached), or null if
 // they aren't in it. Leaving an event removes you from its group chat.
 export async function getChat(chatId, uid) {
