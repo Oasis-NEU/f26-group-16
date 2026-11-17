@@ -3,6 +3,7 @@ import {
   CHAT_NAME_MAX,
   MESSAGE_MAX,
   getChat,
+  getUsers,
   listChats,
   listMessages,
   listUnreadChats,
@@ -13,10 +14,11 @@ import {
 } from '../api.jsx'
 import { OPEN_CHAT_EVENT } from '../utils/chat_events.js'
 import { chatTitle, defaultChatTitle, displayName, formatTimestamp } from '../utils/format.js'
-import { eventPath } from '../utils/routes.js'
+import { eventPath, profilePath } from '../utils/routes.js'
 import { useDismiss } from '../utils/use_dismiss.js'
 import { useLiveChat } from '../utils/use_live_chat.js'
 import { ConnectionBanner, CountBadge, ErrorMessage, PopupNote, inputClass, popupPanelClass } from './ui.jsx'
+import Avatar from './Avatar.jsx'
 import UserName from './UserName.jsx'
 
 // The chat list's tabs: direct chats, and event chats (`event_id` set).
@@ -215,12 +217,54 @@ function ChatList({ profile, tab, onTabChange, onSelect, onRead }) {
   )
 }
 
-// `showSenders` puts the sender's name over other people's messages (group chats).
-function MessageList({ messages, uid, showSenders = false }) {
+// Full `users` rows (with `profile_pic_data`) for the senders of `messages`,
+// by uid. Messages only carry the sender's name, because the chat re-fetches
+// up to 200 of them on every update and pictures would come along each time.
+// Instead each sender is fetched once while the chat is open; a failed fetch
+// is retried on the next update.
+function useSenderProfiles(messages, enabled) {
+  const [profiles, setProfiles] = useState({})
+  const requested = useRef(new Set())
+
+  useEffect(() => {
+    if (!enabled) return
+    const missing = [...new Set(messages.map((m) => m.sender_uid))].filter((id) => !requested.current.has(id))
+    if (missing.length === 0) return
+    missing.forEach((id) => requested.current.add(id))
+    getUsers(missing).then(
+      (users) => setProfiles((prev) => ({ ...prev, ...Object.fromEntries(users.map((user) => [user.uid, user])) })),
+      () => missing.forEach((id) => requested.current.delete(id)),
+    )
+  }, [messages, enabled])
+
+  return profiles
+}
+
+// The sender's picture next to their message, linking to their profile
+// (`onLeave` closes the popup). Deleted accounts get a plain 👤 with no link.
+function SenderAvatar({ user, onLeave }) {
+  const avatar = <Avatar user={user} className="h-8 w-8 text-xs" />
+  if (!user?.is_active) return avatar
+  return (
+    <a
+      href={profilePath(user.uid)}
+      onClick={onLeave}
+      aria-label={`${displayName(user)}’s profile`}
+      className="shrink-0 rounded-full hover:opacity-80"
+    >
+      {avatar}
+    </a>
+  )
+}
+
+// `showSenders` puts the sender's picture and name next to other people's
+// messages (group chats).
+function MessageList({ messages, uid, showSenders = false, onLeave }) {
   const listRef = useRef(null)
   // Follow new messages, unless the user has scrolled up to read older ones.
   const followRef = useRef(true)
   const lastId = messages.at(-1)?.msg_id
+  const profiles = useSenderProfiles(messages, showSenders)
 
   useLayoutEffect(() => {
     if (followRef.current && listRef.current) listRef.current.scrollTop = listRef.current.scrollHeight
@@ -236,11 +280,11 @@ function MessageList({ messages, uid, showSenders = false }) {
       {messages.length === 0 && <p className="py-4 text-center text-sm text-muted">Say hello to start the conversation.</p>}
       {messages.map((message) => {
         const mine = message.sender_uid === uid
-        return (
-          <div key={message.msg_id} className={`flex flex-col ${mine ? 'items-end' : 'items-start'}`}>
-            {showSenders && !mine && (
-              <span className="mb-1 text-xs font-semibold text-muted">{displayName(message.sender)}</span>
-            )}
+        const withSender = showSenders && !mine
+        const sender = profiles[message.sender_uid] ?? message.sender
+        const body = (
+          <div className={`flex min-w-0 flex-1 flex-col ${mine ? 'items-end' : 'items-start'}`}>
+            {withSender && <span className="mb-1 text-xs font-semibold text-muted">{displayName(sender)}</span>}
             <p
               className={`max-w-[85%] whitespace-pre-wrap break-words rounded-2xl px-3 py-2 text-sm ${
                 mine ? 'bg-brand-500 text-white' : 'bg-brand-100 text-ink'
@@ -249,6 +293,13 @@ function MessageList({ messages, uid, showSenders = false }) {
               {message.msg_content}
             </p>
             <span className="mt-1 text-xs text-muted">{formatTimestamp(message.msg_time)}</span>
+          </div>
+        )
+        if (!withSender) return <div key={message.msg_id} className="flex">{body}</div>
+        return (
+          <div key={message.msg_id} className="flex items-start gap-2">
+            <SenderAvatar user={sender} onLeave={onLeave} />
+            {body}
           </div>
         )
       })}
@@ -493,7 +544,7 @@ function ChatView({ chatId, uid, onBack, onLeave, onRead }) {
       <ConnectionBanner show={failed} />
       {!data && <div className="flex-1">{!failed && <PopupNote>Loading…</PopupNote>}</div>}
       {data && !chat && <PopupNote>This chat isn’t available. Event chats are only for the organizer and people who joined.</PopupNote>}
-      {chat && <MessageList messages={data.messages} uid={uid} showSenders={isGroup} />}
+      {chat && <MessageList messages={data.messages} uid={uid} showSenders={isGroup} onLeave={onLeave} />}
       {chat &&
         (isGroup || chat.other?.is_active ? (
           <MessageForm chatId={chatId} uid={uid} onSent={refresh} />
