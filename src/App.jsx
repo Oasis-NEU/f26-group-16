@@ -8,9 +8,10 @@ import AccountSettings from './pages/account_settings.jsx'
 import EditEvent from './pages/edit_event.jsx'
 import EventDetail from './pages/event_detail.jsx'
 import Homepage from './pages/homepage.jsx'
+import IntroPage from './pages/intro_page.jsx'
 import LoginPage from './pages/login_page.jsx'
 import Schedule from './pages/schedule.jsx'
-import { HOME_PATH, clearRoute, useRoute } from './utils/routes.js'
+import { HOME_PATH, clearRoute, parseRoute, useRoute } from './utils/routes.js'
 
 function Loading() {
   return (
@@ -76,6 +77,20 @@ function App() {
   // Tagged with the auth id it belongs to, so a stale profile is never shown.
   const [loaded, setLoaded] = useState(null)
   const [notice, setNotice] = useState('')
+  // Logged-out view: null = landing page, 'login' / 'signup' = the login card.
+  // Kept in state, not the hash, so a shared link survives until login. A
+  // shared link skips the landing page and goes straight to logging in.
+  const [authView, setAuthView] = useState(() => (parseRoute(window.location.hash).page === 'home' ? null : 'login'))
+
+  // Same for a link followed later in the tab (e.g. Back after logging out).
+  // Ignored while logged in; logging out resets it.
+  useEffect(() => {
+    const onHashChange = () => {
+      if (parseRoute(window.location.hash).page !== 'home') setAuthView((view) => view ?? 'login')
+    }
+    window.addEventListener('hashchange', onHashChange)
+    return () => window.removeEventListener('hashchange', onHashChange)
+  }, [])
 
   useEffect(
     () =>
@@ -83,7 +98,10 @@ function App() {
         // Logging out (from any page, or a deleted account being sent back)
         // forgets the page, so the next login starts on the homepage. A
         // logged-out visitor opening a shared link keeps it.
-        if (event === 'SIGNED_OUT') clearRoute()
+        if (event === 'SIGNED_OUT') {
+          clearRoute()
+          setAuthView(null)
+        }
         setSession(next)
       }),
     [],
@@ -114,8 +132,22 @@ function App() {
     }
   }, [authId])
 
+  const openAuthView = (view) => {
+    if (!view) setNotice('')
+    setAuthView(view)
+    window.scrollTo(0, 0)
+  }
+
   if (session === undefined) return <Loading />
-  if (!session) return <LoginPage notice={notice} />
+  if (!session) {
+    // A notice (e.g. a deleted account) is shown on the login card.
+    if (!authView && !notice) {
+      return <IntroPage onLogIn={() => openAuthView('login')} onSignUp={() => openAuthView('signup')} />
+    }
+    return (
+      <LoginPage key={authView} notice={notice} initialMode={authView ?? 'login'} onBack={() => openAuthView(null)} />
+    )
+  }
   if (!profile) return notice ? <LoginPage notice={notice} /> : <Loading />
   return (
     <Shell

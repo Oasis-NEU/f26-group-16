@@ -13,9 +13,19 @@ import {
 } from '../api.jsx'
 import { ErrorMessage, Notice, inputClass, primaryButton, secondaryButton, smallButton } from '../components/ui.jsx'
 import { joinedCount } from '../utils/capacity.js'
-import { categoryEmoji, fromDateTimeInput, toDateTimeInput } from '../utils/format.js'
+import {
+  allDayInputs,
+  categoryEmoji,
+  endOfDay,
+  fromDateTimeInput,
+  startOfDay,
+  timeZoneLabel,
+  toDateInput,
+  toDateTimeInput,
+} from '../utils/format.js'
 import { HOME_PATH, eventPath, navigate } from '../utils/routes.js'
 import { showToast } from '../utils/toast.js'
+import { useCategoryPicture } from '../utils/use_category_picture.js'
 
 // `warning` shows in red under the field, in place of the hint.
 function Field({ id, label, optional, hint, warning, children }) {
@@ -43,6 +53,7 @@ const parseHeadcount = (value) => (value.trim() === '' ? null : Number(value))
 function PictureField({ picture, categoryId, onChange }) {
   const [converting, setConverting] = useState(false)
   const [error, setError] = useState('')
+  const categoryPicture = useCategoryPicture(categoryId)
 
   const pick = async (event) => {
     const file = event.target.files?.[0]
@@ -65,6 +76,13 @@ function PictureField({ picture, categoryId, onChange }) {
       </p>
       {picture ? (
         <img src={picture} alt="Cover picture preview" className="aspect-video w-full rounded-xl border border-line object-cover" />
+      ) : categoryPicture ? (
+        <div className="relative">
+          <img src={categoryPicture} alt="Category picture preview" className="aspect-video w-full rounded-xl border border-line object-cover" />
+          <span className="absolute bottom-2 left-2 rounded-full bg-surface px-3 py-1 text-xs font-semibold text-ink shadow-sm">
+            Category picture, used until you add one
+          </span>
+        </div>
       ) : (
         <div className="flex aspect-video w-full flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-line bg-brand-50">
           <span className="text-5xl" aria-hidden="true">
@@ -84,7 +102,6 @@ function PictureField({ picture, categoryId, onChange }) {
           </button>
         )}
       </div>
-      <p className="text-xs text-muted">Any image works. It’s resized to fit 1920×1080 and saved as WebP.</p>
       <ErrorMessage message={error} />
     </div>
   )
@@ -95,8 +112,18 @@ function EventForm({ categories, event, profile }) {
   const ids = useId()
   const [title, setTitle] = useState(event?.event_title ?? '')
   const [categoryId, setCategoryId] = useState(event?.category_id ?? '')
-  const [start, setStart] = useState(toDateTimeInput(event?.start_time))
-  const [end, setEnd] = useState(toDateTimeInput(event?.end_time))
+  // Timed events use the date-and-time fields; all-day events the day fields.
+  // Both are kept, so switching back and forth doesn't lose what was typed.
+  const wasAllDay = Boolean(event?.all_day)
+  const [allDay, setAllDay] = useState(wasAllDay)
+  const [start, setStart] = useState(wasAllDay ? '' : toDateTimeInput(event?.start_time))
+  const [end, setEnd] = useState(wasAllDay ? '' : toDateTimeInput(event?.end_time))
+  // The days the event was saved with, as this browser reads them.
+  const [savedDays] = useState(() =>
+    wasAllDay ? allDayInputs(event.start_time, event.end_time) : { firstDay: '', lastDay: '' },
+  )
+  const [firstDay, setFirstDay] = useState(savedDays.firstDay)
+  const [lastDay, setLastDay] = useState(savedDays.lastDay === savedDays.firstDay ? '' : savedDays.lastDay)
   const [location, setLocation] = useState(event?.location ?? '')
   const [description, setDescription] = useState(event?.event_description ?? '')
   const [picture, setPicture] = useState(event?.picture_data ?? null)
@@ -109,16 +136,40 @@ function EventForm({ categories, event, profile }) {
   const limit = parseHeadcount(headcount)
   const headcountWarning = limit != null && limit < joined ? capacityBelowJoinedMessage(joined) : ''
 
+  // New events can't start in the past (api.jsx checks this too, with a
+  // clearer message for edits). The browser blocks earlier picks up front.
+  // Set when the form opens.
+  const [{ nowInput, todayInput }] = useState(() =>
+    event
+      ? {}
+      : { nowInput: toDateTimeInput(Math.floor(Date.now() / 1000)), todayInput: toDateInput(new Date()) },
+  )
+
+  const toggleAllDay = (on) => {
+    setAllDay(on)
+    // Carry the dates over the first time each set of fields is used.
+    if (on && !firstDay && start) {
+      setFirstDay(start.slice(0, 10))
+      if (end && end.slice(0, 10) !== start.slice(0, 10)) setLastDay(end.slice(0, 10))
+    }
+  }
+
   const submit = async (e) => {
     e.preventDefault()
     setError('')
     setBusy(true)
+    // All day: local midnight of the first day to 23:59:59 of the last. If the
+    // days weren't touched, keep the saved times, so editing from another time
+    // zone doesn't move the event.
+    const daysUnchanged =
+      wasAllDay && allDay && firstDay === savedDays.firstDay && (lastDay || firstDay) === savedDays.lastDay
     const fields = {
       title,
       description,
       location,
-      startTime: fromDateTimeInput(start),
-      endTime: fromDateTimeInput(end),
+      startTime: daysUnchanged ? event.start_time : allDay ? startOfDay(firstDay) : fromDateTimeInput(start),
+      endTime: daysUnchanged ? event.end_time : allDay ? endOfDay(lastDay || firstDay) : fromDateTimeInput(end),
+      allDay,
       categoryId: categoryId || null,
       pictureData: picture,
       maxParticipants: limit,
@@ -158,27 +209,65 @@ function EventForm({ categories, event, profile }) {
           ))}
         </select>
       </Field>
-      <div className="grid gap-6 sm:grid-cols-2">
-        <Field id={`${ids}-start`} label="Starts">
+      <div className="space-y-4">
+        <label className="inline-flex cursor-pointer items-center gap-2 text-sm font-semibold text-ink">
           <input
-            id={`${ids}-start`}
-            type="datetime-local"
-            value={start}
-            onChange={(e) => setStart(e.target.value)}
-            required
-            className={inputClass}
+            type="checkbox"
+            checked={allDay}
+            onChange={(e) => toggleAllDay(e.target.checked)}
+            className="h-4 w-4 cursor-pointer accent-brand-500"
           />
-        </Field>
-        <Field id={`${ids}-end`} label="Ends" optional>
-          <input
-            id={`${ids}-end`}
-            type="datetime-local"
-            value={end}
-            min={start || undefined}
-            onChange={(e) => setEnd(e.target.value)}
-            className={inputClass}
-          />
-        </Field>
+          All day
+        </label>
+        {allDay ? (
+          <div className="grid gap-6 sm:grid-cols-2">
+            <Field id={`${ids}-first-day`} label="Day">
+              <input
+                id={`${ids}-first-day`}
+                type="date"
+                value={firstDay}
+                min={todayInput}
+                onChange={(e) => setFirstDay(e.target.value)}
+                required
+                className={inputClass}
+              />
+            </Field>
+            <Field id={`${ids}-last-day`} label="Last day" optional hint="For events that run over several days.">
+              <input
+                id={`${ids}-last-day`}
+                type="date"
+                value={lastDay}
+                min={firstDay || todayInput}
+                onChange={(e) => setLastDay(e.target.value)}
+                className={inputClass}
+              />
+            </Field>
+          </div>
+        ) : (
+          <div className="grid gap-6 sm:grid-cols-2">
+            <Field id={`${ids}-start`} label="Starts" hint={`In your time zone (${timeZoneLabel()}).`}>
+              <input
+                id={`${ids}-start`}
+                type="datetime-local"
+                value={start}
+                min={nowInput}
+                onChange={(e) => setStart(e.target.value)}
+                required
+                className={inputClass}
+              />
+            </Field>
+            <Field id={`${ids}-end`} label="Ends" optional>
+              <input
+                id={`${ids}-end`}
+                type="datetime-local"
+                value={end}
+                min={start || nowInput}
+                onChange={(e) => setEnd(e.target.value)}
+                className={inputClass}
+              />
+            </Field>
+          </div>
+        )}
       </div>
       <Field
         id={`${ids}-headcount`}
@@ -222,7 +311,7 @@ function EventForm({ categories, event, profile }) {
           maxLength={DESCRIPTION_MAX}
           rows={6}
           placeholder="What should people know? What should they bring?"
-          className={`${inputClass} resize-y`}
+          className={`${inputClass} max-h-96 min-h-32 resize-y`}
         />
       </Field>
       <PictureField picture={picture} categoryId={categoryId} onChange={setPicture} />

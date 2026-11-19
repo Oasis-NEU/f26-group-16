@@ -45,8 +45,30 @@ function formatDay(date) {
 const isSameDay = (a, b) => a.toDateString() === b.toDateString()
 
 // "Sat, Nov 8 · 2:00 PM", plus " – 4:00 PM" (or another day) when there's an end.
-export function formatEventTime(start, end) {
+// All-day events are saved as midnight to 23:59:59 in the organizer's time
+// zone. Reading each day from 12 hours inside those ends gives the same
+// calendar days for anyone within 12 hours of the organizer's time zone
+// (instead of shifting by a day for anyone west or east of them). Returns
+// local midnight of the first and last day.
+const HALF_DAY = 12 * 60 * 60
+export function allDayDates(start, end) {
+  const localMidnight = (seconds) => {
+    const date = new Date(seconds * 1000)
+    return new Date(date.getFullYear(), date.getMonth(), date.getDate())
+  }
+  const first = localMidnight(start + HALF_DAY)
+  const last = localMidnight(Math.max((end ?? start) - HALF_DAY, start + HALF_DAY))
+  return { first, last }
+}
+
+// All-day events read "Sat, Nov 8 · All day" or "Sat, Nov 8 – Mon, Nov 10 · All day".
+export function formatEventTime(start, end, allDay = false) {
   const startDate = new Date(start * 1000)
+  if (allDay) {
+    const { first, last } = allDayDates(start, end)
+    const days = isSameDay(first, last) ? formatDay(first) : `${formatDay(first)} – ${formatDay(last)}`
+    return `${days} · All day`
+  }
   const text = `${formatDay(startDate)} · ${timeFormat.format(startDate)}`
   if (end == null) return text
   const endDate = new Date(end * 1000)
@@ -82,6 +104,21 @@ export function toDateTimeInput(seconds) {
   return `${toDateInput(date)}T${pad(date.getHours())}:${pad(date.getMinutes())}`
 }
 
+// "YYYY-MM-DDTHH:MM" is read as local time, so the result is the same moment
+// wherever the organizer is.
 export function fromDateTimeInput(value) {
   return value ? Math.floor(new Date(value).getTime() / 1000) : null
+}
+
+// An all-day event's days as "YYYY-MM-DD" strings for <input type="date">
+// (see allDayDates()).
+export function allDayInputs(start, end) {
+  const { first, last } = allDayDates(start, end)
+  return { firstDay: toDateInput(first), lastDay: toDateInput(last) }
+}
+
+// The device's time zone, e.g. "EST" or "GMT+1", for form hints.
+export function timeZoneLabel(date = new Date()) {
+  const part = new Intl.DateTimeFormat(undefined, { timeZoneName: 'short' }).formatToParts(date).find((p) => p.type === 'timeZoneName')
+  return part?.value ?? ''
 }

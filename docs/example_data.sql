@@ -14,7 +14,7 @@ INSERT INTO users(uid, full_name, is_active) VALUES
 
 -- Example events without picture data
 INSERT INTO events (event_id, event_title, event_description, create_time, start_time, end_time, location, organizer_uid, category_id, max_participants) VALUES
-('0248f7db-1499-4d66-bc7e-ba4b3cf31a98', 'Welcome Back Picnic', 'Free food, lawn games, and club tables. (This one already happened; it shows up when you widen the date filter.)', 1796159704, 1795276800, 1795287600, 'Main Quad', example_user, 'social', 3),
+('0248f7db-1499-4d66-bc7e-ba4b3cf31a98', 'Welcome Back Picnic', 'Free food, lawn games, and club tables. (This one already happened, so it’s archived: it’s off the homepage but still opens by link and on the organizer’s profile.)', 1796159704, 1795276800, 1795287600, 'Main Quad', example_user, 'social', 3),
 ('06c83de2-018b-468f-9e3a-83a00d23252b', 'Board Game Night', 'Catan, Codenames, Ticket to Ride, and whatever you bring. Pizza at 8.', 1796159703, 1796515200, 1796526000, 'West Hall Common Room', example_user, 'social', null),
 ('3404fd35-cf9b-41b9-afaa-f24b77b5b4db', 'Photography Club Photo Walk', 'A slow loop around campus looking for fall colors. Phones are totally fine, no fancy camera needed.', 1796159703, 1796742000, null, 'Meet at the Main Quad fountain', example_user, 'clubs', 8),
 ('37c02568-92e6-4f2f-a3be-9d71f17dd390', 'Open Gym Volleyball', 'Rotating 6v6 games until the gym closes. Beginners welcome; we’ll pair you up with someone who has played before.

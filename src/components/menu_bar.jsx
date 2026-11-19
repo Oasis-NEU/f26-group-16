@@ -7,6 +7,7 @@ import Avatar from './Avatar.jsx'
 import Logo from './Logo.jsx'
 import MessagesPopup from './messages_popup.jsx'
 import NotificationsPopup from './notifications_popup.jsx'
+import ThemeButton from './ThemeButton.jsx'
 
 const NAV_ITEMS = [
   { page: 'home', label: 'Home', icon: '🏠', href: HOME_PATH },
@@ -53,23 +54,6 @@ function MenuLink({ item, currentPage, onClick }) {
 }
 
 const isProfilePage = (page) => PROFILE_ITEMS.some((item) => item.page === page)
-
-// ☀️/🌙 button next to the notifications bell (from `md` up). It shows the
-// theme it switches to. Below `md` the ☰ menu has the same switch.
-function ThemeButton() {
-  const [dark, toggle] = useDarkMode()
-  return (
-    <button
-      type="button"
-      onClick={toggle}
-      aria-label={dark ? 'Switch to light mode' : 'Switch to dark mode'}
-      title={dark ? 'Light mode' : 'Dark mode'}
-      className="hidden h-10 w-10 items-center justify-center rounded-xl border border-line bg-surface text-lg hover:bg-brand-50 md:flex"
-    >
-      <span aria-hidden="true">{dark ? '☀️' : '🌙'}</span>
-    </button>
-  )
-}
 
 // "Profile" button with the user's picture. Opens a list with "My profile" and
 // "Account settings".
@@ -160,7 +144,7 @@ export default function MenuBar({ currentPage, profile }) {
           <span className="text-xl font-extrabold tracking-tight text-ink">NUMeet</span>
         </a>
         <div className="flex items-center gap-2">
-          <ThemeButton />
+          <ThemeButton className="hidden md:flex" />
           <NotificationsPopup profile={profile} />
           <MessagesPopup profile={profile} />
           <nav aria-label="Main" className="hidden items-center gap-1 md:flex">

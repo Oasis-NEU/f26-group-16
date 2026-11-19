@@ -18,6 +18,15 @@ The platform is open to any campus event: study sessions, club meetings, open mi
 
 ## Interface Functions
 
+### Landing page
+
+- Shown to logged-out visitors instead of the app (`src/pages/intro_page.jsx`)
+- Header with the logo, the ☀️/🌙 theme button (at every width), "Log in", and "Sign up"
+- Sections: hero (badge, heading, pitch, "Create an account" / "Log in" buttons), four feature cards (posting, joining, chats, schedule), "How it works" in three steps, a red CTA panel, and a footer
+- Static content only: it never fetches or previews events (logged-out visitors can't read them anyway), and has no user counts or testimonials
+- "Log in" / "Sign up" open the login card in that mode, with a "← Back" link to return here
+- A shared link opened while logged out skips this page and goes straight to the login card. Logging out comes back here. A deleted-account notice shows on the login card, not here
+
 ### Create account page
 
 - Text field to enter email address
@@ -27,24 +36,29 @@ The platform is open to any campus event: study sessions, club meetings, open mi
 
 ### Login page
 
+- Opened from the landing page (in log in or create account mode); "← Back" returns to it
+
 - Prompt for the email and password
 - If user is deleted (`is_active` is false), display an error message saying so
 - Use session token (keep login state until manually logged out)
-- Logging out clears the page from the URL, so the next login starts on the homepage. A shared link opened while logged out is kept, so logging in goes straight to it
+- Logging out clears the page from the URL and returns to the landing page, so the next login starts on the homepage. A shared link opened while logged out is kept, so logging in goes straight to it
 
 ### Homepage
 
-- Displayed when the user is logged in
+- Displayed when the user is logged in. Events are never shown before login: RLS only lets `authenticated` read `events` and `event_categories`
 - The home page lists the available events in a grid view, detailing the picture, title, date, and organizer (account) of the event
     - Events with a headcount limit also show "4/10 · 6 spots left" (or "10/10 · Full" in `danger` red) on the card. Events without a limit show no count
 - The user can choose different categories (e.g. sport, entertainment) to filter events
-    - Additional filters like date range
+    - Additional filters like date range. "From" keeps events still going on that day, so a multi-day event stays listed after its first day; "To" is on the start time
+- Archived events never show here, whatever the filters (see [Archiving](#archiving))
+- All-day events show "Sat, Nov 8 · All day" (or "Sat, Nov 8 – Mon, Nov 10 · All day") instead of times
 - "Post an event" button that opens the edit event page in create mode (same form, empty)
 
 ### Detail page
 
 - Each post includes a picture, title, description & location, category, and the start/end date of the event with the organizer (account) of it
-    - If picture not present, use a placeholder glyph instead
+    - If picture not present, use the category's default picture (`event_categories.picture_data`), or the category glyph when the category has none (or no category)
+    - Once an event has ended, it shows "🗄️ This event has ended." under the title (plus "It’s no longer listed on the homepage." once archived), and the button reads "Event ended" (disabled) for people who haven't joined; people already in can still leave. The database rejects joins to ended events (`event_ended`, "This event has ended, so it can’t be joined.")
 - "Join event" button with a display of how many people already joined/subscribed
     - With a headcount limit it reads "4/10 joined · 6 spots left". Once full, the button is disabled and says "Full" for people who haven't joined; people already in can still leave
     - The database rejects joins past the limit (`trg_check_event_capacity`), so a stale page can't overfill an event. If that happens, the page shows "Sorry, this event just filled up." and switches to Full
@@ -56,7 +70,19 @@ The platform is open to any campus event: study sessions, club meetings, open mi
 - "Who's going" list of people who joined, each with a message button to chat with them directly (not shown for yourself or deleted accounts)
 - If viewing as the event creator, an "Edit event" button takes the place of the "Join event" button (the creator can't join their own event; the joined count still shows). It opens the "edit event" page allowing for modifications of these fields
     - The form has an optional "How many people?" field (headcount limit, at least 2; empty = no limit). When editing, a limit below the people already joined shows a red warning and the form can't be saved
+    - "All day" checkbox above the times. Off: "Starts" (date and time, with a hint naming the device's time zone) and optional "Ends". On: "Day" and an optional "Last day" (for events over several days); the event runs from local midnight of the day to 23:59:59 of the last day. Switching keeps what was typed in each set of fields, and the first switch on carries the dates over
+    - The start can't be in the past: new events (the pickers don't allow earlier times), and edits that change the start or switch all day on/off ("The start time has already passed. Pick a time in the future." / "That day has already passed."). Leaving the time alone on an event that already started is fine. All-day events can be posted for today
+    - The description box can be dragged taller, up to `max-h-96` (comment boxes up to `max-h-64`)
+    - Without a picture, the preview shows the category's default picture labeled "Category picture, used until you add one" (or the glyph)
     - A "Delete event" button sits below it. It asks first in a confirmation dialog, then deletes the event (with its comments and joins) and goes back to the homepage
+
+### Archiving
+
+- Two steps, both worked out in `src/utils/archive.js`:
+    - **Ended** (`hasEnded(event)`): the end has passed (events without an end time count as an hour long). It can't be joined anymore, and cards get an "Ended" badge and a faded picture
+    - **Archived** (`isArchived(event)`, `archiveTime(event)`): right after the last day of an all-day event, otherwise 24 hours after it ends. `events.archive_time` holds that time (a generated column)
+- So a regular event stays on the homepage, marked "Ended", for a day after it's over, then drops off. Archived events are left out of the homepage and schedule suggestions (`listEvents()`), but still open by link, show on the organizer's profile, and stay on the schedule of people who joined
+- There's no separate flag and no job that runs: everything compares times with the current time
 
 ### Personal schedule page
 
@@ -64,6 +90,7 @@ The platform is open to any campus event: study sessions, club meetings, open mi
     - "‹" / "This week" / "›" buttons move between weeks; the week label (e.g. "Nov 8 – 14") sits next to them
     - Each event is a block placed at its start/end time. Events without an end time are drawn as 1 hour long. Overlapping events sit side by side
     - Joined and organized events that overlap each other get a red outline and a ⚠️
+    - All-day events sit in an "All day" row between the day headers and the hours, as small chips (solid, or dashed for suggestions, with the same + / × button and details popup). They never count as overlaps or as taken time. The row only shows on weeks that have one, and the hour rows shrink to make room for it
     - Past events are faded, and a red line marks the current time on today's column
     - The time range is 8 AM–10 PM by default and grows to fit earlier or later events
     - Hour rows shrink with the window (between 1.25rem and 3rem) so the whole week fits on one screen without scrolling
@@ -78,7 +105,8 @@ The platform is open to any campus event: study sessions, club meetings, open mi
 - If the week has no joined or organized events, a status line says so, with a "Jump to your next event" button (or a link to browse events if the user hasn't joined or posted anything)
 - "Suggest events" switch: off by default, held only in page state (not saved in the database or browser storage), so it's off again on every visit
     - While on, events that fit the user's open time show as dashed blocks in that week, with a "+" button that joins the event
-    - Open time is any time not taken by a joined or organized event (there is no availability table). A suggestion must not overlap one of those, not be organized by the user, not be joined already, not be full, and not have started
+    - Open time is any time not taken by a joined or organized event (there is no availability table). A suggestion must not overlap one of those, not be organized by the user, not be joined already, not be full, not be archived, and not have started (all-day events can be suggested until their last day ends)
+    - Suggestions stay between 8 AM and 9 PM (`REGULAR_HOURS` in `src/utils/schedule.js`: starting at or after 8 AM and ending by 9 PM the same day). While suggestions are on, an "Include early & late events" switch next to it allows any hour; the calendar grows to fit them. Off by default and held only in page state, like "Suggest events". All-day events always count as within the hours
     - At most 8 suggestions per week. Categories the user joins most come first, then the soonest
     - Suggestions are fetched per week only while the switch is on, and reused when toggling or returning to a week. Past weeks get none
 - Joining and removing update the calendar right away and roll back with an error message if the request fails
@@ -122,9 +150,9 @@ The platform is open to any campus event: study sessions, club meetings, open mi
 - Popup lists the newest 30 notifications, each saying what happened and when, and links to the event (except for deleted events, which have no page)
 - Notification types (`notification_type`):
     - `event_joined`: "<name> joined <event>", sent to the organizer. Joining your own event sends nothing, and leaving and rejoining doesn't notify again
-    - `event_updated`: "<event> changed: now <new time>, at <new place>", sent to everyone who joined when the organizer changes the time or location. Only the parts that changed are listed
+    - `event_updated`: "<event> changed: now <new time>, at <new place>", sent to everyone who joined when the organizer changes the time (including switching all day on or off) or location. Only the parts that changed are listed; all-day times read like "Sat, Nov 8 · All day"
     - `event_deleted`: "<name> deleted <event>", sent to everyone who joined. Deleting an event is how organizers cancel it (there's no separate cancel state). Older notifications about the event are removed
-    - `event_reminder`: "Reminder: <event> starts at <time>", sent to everyone who joined, within the hour before it starts. There's no server to run a schedule, so `listNotifications()` calls the `create_due_reminders()` database function on every poll; it makes each reminder once. If you don't open the app during that hour, no reminder is made (there are no push notifications or emails anyway). Changing the start time clears old reminders so a new one comes for the new time
+    - `event_reminder`: "Reminder: <event> starts at <time>", sent to everyone who joined, within the hour before it starts. There's no server to run a schedule, so `listNotifications()` calls the `create_due_reminders()` database function on every poll; it makes each reminder once. If you don't open the app during that hour, no reminder is made (there are no push notifications or emails anyway). Changing the start time clears old reminders so a new one comes for the new time. All-day events get no reminder (it would arrive around 11 PM the night before)
 - Opening the popup marks everything as read; those stay highlighted until it closes
 - If couldn't connect to server, display a small banner in the popup saying so and keep retrying
 
@@ -158,11 +186,14 @@ The platform is open to any campus event: study sessions, club meetings, open mi
         - To restore an account, an administrator re-links the old row to the person's new login (see `docs/auth-setup.md`); `ON UPDATE CASCADE` carries the uid change to every table
     - Backend validation: Picture size ≤ 10MB (compress & encode uploaded file to WebP)
 - Table of event categories
-    - Category ID, name
+    - Category ID, name, default cover picture (`picture_data`, WebP data URL, nullable) for the category's events without their own
+    - Only admins can write it. The pictures come from `scripts/category_images/` (credits in `CREDITS.md` there): `node scripts/category_pictures_sql.mjs` writes `docs/category_pictures.sql`, which you run in the SQL editor
+    - `listCategories()` reads names only; `categoryPictures()` loads the pictures once per page load, and `useCategoryPicture(categoryId)` (`src/utils/use_category_picture.js`) gives components one
 - Table for events created
-    - Title, picture (encode as WebP at 1920x1080 max), start & end date, organizer UID, unique event ID, category, headcount limit (`max_participants`, NULL = no limit)
+    - Title, picture (encode as WebP at 1920x1080 max), start & end date, organizer UID, unique event ID, category, headcount limit (`max_participants`, NULL = no limit), all-day flag (`all_day`), and `archive_time` (generated; see [Archiving](#archiving))
+    - All-day events store local midnight of the first day as `start_time` and 23:59:59 of the last day as `end_time` (`chk_all_day_end`: they always have one). The browser works these out, so the database never needs a time zone. To show the same days in other time zones, `allDayDates(start, end)` in `src/utils/format.js` reads each day 12 hours inside those ends (right for anyone within 12 hours of the organizer); use it, not `new Date(start_time)`, for all-day days. Editing an all-day event without changing its days keeps the saved times
     - Backend validation: Title ≤ 100 chars; prevent user from choosing end date earlier than start date; headcount limit ≥ 2, etc.
-    - Headcount triggers: `trg_check_event_capacity` rejects a join once the event is full (error `event_full`), and `trg_check_capacity_not_below_joined` rejects lowering the limit below the people already joined (error `capacity_below_joined`)
+    - Headcount triggers: `trg_check_event_capacity` rejects a join once the event is full (error `event_full`) or has ended (error `event_ended`; SQL editor inserts are exempt so example data can add joins to old events), and `trg_check_capacity_not_below_joined` rejects lowering the limit below the people already joined (error `capacity_below_joined`)
     - Event rows from `api.jsx` carry `joined: [{ count }]`. Read it with `joinedCount(event)`, and use `isFull(event)` / `spotsLabel(count, max)` from `src/utils/capacity.js`
 - Table for comments
     - Each entry contains the event ID which the comment belongs to
@@ -192,6 +223,8 @@ All date and time values are represented using UNIX timestamps in seconds. Use a
 ### SQL Representation
 
 SQL representation of the database can be found in the `docs/main_schema.sql` file. Example data can be found in the `docs/example_data.sql` file.
+
+Changes to an existing database go in `docs/migrations/` as dated files (e.g. `2026-11-19_all_day_archive_category_pictures.sql`), written so running one twice is safe; run them in name order. Never edit one after it has been run on the shared project: add a new file that fixes it. Inside a `SECURITY DEFINER` function `current_user` is the function's owner, so tell app requests apart with `(SELECT auth.uid()) IS NOT NULL` there; `docs/main_schema.sql` always has the full current schema too. If the app is newer than the database, Supabase errors with code 42703 (or PGRST204 on inserts) and `api.jsx` shows "The database is missing a recent update. Ask the team to run the newest file in docs/migrations."
 
 Only `chat_msgs` is published to Supabase Realtime. Don't publish `chats_list`: Realtime skips RLS for DELETE events, so every subscriber would see who left which event chat. The unread badges re-fetch on new `chat_msgs` events instead.
 
@@ -239,6 +272,8 @@ To fill an empty database with example events (posted by the test user, some wit
 ## Data functions
 
 Design appropriate functions for inserting values into the database and fetching records based on the example above (perform SQL queries on the Supabase server). Put them into a separate file (e.g. `src/api.jsx`) for organization and clarity. Implement relevant data validation and checks (e.g. title length, required fields, end_time >= start_time, image size/type limits) to prevent bad data from being written.
+
+Raw database errors never reach the page. `toError()` in `api.jsx` turns CHECK constraint failures (code 23514) into a sentence using `CHECK_MESSAGES` (keyed by constraint name, e.g. `events_start_time_check` → "That start time isn’t valid. Check the date, including the year."), with a general fallback. Add an entry there when you add a CHECK constraint. Times are UNIX seconds, so the organizer's time zone can't break a time check; `fromDateTimeInput()` reads the form's value as local time.
 
 Auth functions in `src/api.jsx`:
 
@@ -303,8 +338,8 @@ src/
   App.jsx                   # Core app logic: session check, menu bar, page for the current route
   api.jsx                   # Functions for reading/modifying the database
   pages/
-    intro_page.jsx          # Introduction page before logging in
-    login_page.jsx          # User login and create account page
+    intro_page.jsx          # Landing page shown before logging in (opens login_page)
+    login_page.jsx          # Log in / create account card, opened from the landing page
     homepage.jsx            # Homepage showing the available events
     event_detail.jsx        # Event detail page
     edit_event.jsx          # Edit event page (also creates new events)
@@ -315,12 +350,13 @@ src/
     EventCard.jsx           # event item in homepage & account profile display
     Avatar.jsx              # round profile picture, or the name's first letter
     UserName.jsx            # name linking to the user's profile ("Deleted account" for deleted users)
-    EventPicture.jsx        # event picture, or the category glyph when there is none
+    EventPicture.jsx        # event picture, else the category's default picture, else the category glyph
     WeekCalendar.jsx        # week grid with hourly timeslots for the schedule page
     EventPopover.jsx        # click-to-open details popup for schedule calendar blocks
     ConfirmDialog.jsx       # modal "are you sure?" popup for deleting things
     Logo.jsx                # SVG Husky logo that barks on hover
     menu_bar.jsx            # Top menu bar
+    ThemeButton.jsx         # ☀️/🌙 light/dark switch (menu bar and landing page)
     messages_popup.jsx      # Messages button + unread badge + popup: direct and group chat list, open chat, live updates
     notifications_popup.jsx # Bell button + unread badge + notification list
     toaster.jsx             # Shows showToast() confirmations at the bottom of the screen
@@ -330,17 +366,25 @@ src/
     routes.js               # hash routes: path builders, useRoute(), navigate()
     format.js               # dates, "Deleted account" names, category glyphs
     capacity.js             # headcount: joinedCount(), isFull(), spotsLabel()
+    archive.js              # when events are over: hasEnded(), archiveTime(), isArchived()
+    use_category_picture.js # useCategoryPicture(): a category's default cover picture, loaded once
     chat_events.js          # openChat(chatId) / openGroupChat(eventId): opens the messages popup from any page
     use_dismiss.js          # useDismiss(): closes a popup on Escape or an outside click
     use_polling.js          # usePolling(): re-fetches data on a timer, keeps it through failures
     use_live_chat.js        # useLiveChat(): usePolling() that also re-fetches on new messages (Supabase Realtime)
     toast.js                # showToast(message): confirms an action from any page
     theme.js                # useDarkMode(): light/dark switch, saved in localStorage as `numeet-theme`
-    schedule.js             # schedule helpers: overlaps, conflicts, suggestions, block time labels
-    calendar.js             # week calendar math: week start, day clipping, side-by-side layout
+    schedule.js             # schedule helpers: overlaps, conflicts, suggestions (REGULAR_HOURS), block time labels
+    calendar.js             # week calendar math: week start, day clipping, all-day row, side-by-side layout
 scripts/
   seed_events.mjs           # example events for testing
   seed_images/              # WebP pictures for the example events (credits in CREDITS.md)
+  category_pictures_sql.mjs # writes docs/category_pictures.sql from category_images/
+  category_images/          # default cover picture per category, <category_id>.webp (credits in CREDITS.md)
+docs/
+  main_schema.sql           # full database schema
+  migrations/               # dated SQL changes for existing databases
+  category_pictures.sql     # generated: sets event_categories.picture_data
 ```
 
 ### Routes
@@ -359,6 +403,8 @@ There's no router library. Pages are picked from the URL hash in `App.jsx`, and 
 | `#/settings` | Account settings |
 
 Add new pages as a case in `currentPage()` in `App.jsx`.
+
+The logged-out views (landing page, log in, create account) aren't hash routes. `App.jsx` picks them from state (`authView`), so a shared link's hash stays in the URL until the person logs in.
 
 # Appearance and design
 
@@ -407,7 +453,7 @@ Examples: `bg-page`, `bg-surface`, `text-ink`, `text-muted`, `border-line`, `bg-
 ## Accessibility
 
 - Decorative SVGs get `aria-hidden="true"`. Icon-only buttons get an `aria-label`.
-- The entire interface supports dark mode. It follows the device setting until the user picks a theme with the menu bar's ☀️/🌙 button; that choice is saved in the browser (`numeet-theme`) and wins from then on
+- The entire interface supports dark mode. It follows the device setting until the user picks a theme with the ☀️/🌙 button in the menu bar or on the landing page; that choice is saved in the browser (`numeet-theme`) and wins from then on
 - Inputs without visible labels need an `aria-label`.
 - Animations must be disabled under `prefers-reduced-motion: reduce`.
 

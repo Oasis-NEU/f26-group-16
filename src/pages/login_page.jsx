@@ -192,12 +192,18 @@ function SignUpForm({ onSwitch }) {
 }
 
 // `notice` is a message from App, e.g. when a deleted account gets logged out.
-export default function LoginPage({ notice }) {
-  const [mode, setMode] = useState('login')
+// `initialMode` is 'login' or 'signup'; `onBack` returns to the landing page.
+export default function LoginPage({ notice, initialMode = 'login', onBack }) {
+  const [mode, setMode] = useState(initialMode)
 
   return (
     <main className="flex min-h-screen items-center justify-center bg-brand-50 px-4 py-12 sm:px-6">
       <div className="w-full max-w-md">
+        {onBack && (
+          <button type="button" onClick={onBack} className="mb-4 text-sm font-semibold text-brand-600 hover:underline">
+            <span aria-hidden="true">← </span>Back
+          </button>
+        )}
         <div className="group mb-6 flex items-center justify-center gap-2">
           <Logo className="h-10 w-10" />
           <span className="text-2xl font-extrabold tracking-tight text-ink">NUMeet</span>

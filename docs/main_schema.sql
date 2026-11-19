@@ -86,7 +86,13 @@ CREATE OR REPLACE TRIGGER on_auth_user_created
 -- #region Event categories
 CREATE TABLE event_categories(
     category_id TEXT PRIMARY KEY,
-    name TEXT NOT NULL CHECK (char_length(btrim(name)) BETWEEN 1 AND 50)
+    name TEXT NOT NULL CHECK (char_length(btrim(name)) BETWEEN 1 AND 50),
+    -- Default cover picture for the category's events that have none of their
+    -- own. Filled in by docs/category_pictures.sql.
+    picture_data TEXT CHECK (
+        picture_data LIKE 'data:image/webp;base64,%'
+        AND octet_length(picture_data) <= 13981039
+    )
 );
 
 -- Default event categories
@@ -115,7 +121,20 @@ CREATE TABLE events(
     ),
     -- Headcount limit; NULL = no limit (see the capacity triggers under Joined events)
     max_participants INTEGER CHECK (max_participants IS NULL OR max_participants >= 2),
-    CONSTRAINT chk_event_times CHECK (end_time IS NULL OR end_time >= start_time)
+    -- All-day events start at local midnight of their first day and end at
+    -- 23:59:59 of their last day. The organizer's browser works those out, so
+    -- the database never needs to know a time zone.
+    all_day BOOLEAN NOT NULL DEFAULT false,
+    -- When the event drops off the homepage and schedule suggestions: right
+    -- after the last day of an all-day event, otherwise 24 hours after it ends
+    -- (no end time counts as an hour long). Archived events still open by
+    -- link. Joining stops earlier, once the event ends (check_event_capacity).
+    archive_time BIGINT GENERATED ALWAYS AS (
+        CASE WHEN all_day THEN end_time + 1
+             ELSE COALESCE(end_time, start_time + 3600) + 86400 END
+    ) STORED,
+    CONSTRAINT chk_event_times CHECK (end_time IS NULL OR end_time >= start_time),
+    CONSTRAINT chk_all_day_end CHECK (NOT all_day OR end_time IS NOT NULL)
 );
 
 -- #region Event comments
@@ -158,16 +177,18 @@ CREATE TABLE joined_events(
     CONSTRAINT uc_event_joiner UNIQUE (event_id, joiner_uid)
 );
 
--- Reject joins once an event reaches max_participants. Locking the event row
--- makes two people who join at the same moment take turns, so they can't both
--- get the last spot. SECURITY DEFINER because joiners can't lock someone
--- else's event under RLS.
+-- Reject joins once an event reaches max_participants (event_full) or has
+-- ended (event_ended; no end time counts as an hour long). Locking the event row makes two people who join
+-- at the same moment take turns, so they can't both get the last spot.
+-- SECURITY DEFINER because joiners can't lock someone else's event under RLS.
 CREATE OR REPLACE FUNCTION public.check_event_capacity() RETURNS trigger
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = '' AS $$
 DECLARE
     max_count INTEGER;
+    ends_at BIGINT;
 BEGIN
-    SELECT max_participants INTO max_count FROM public.events
+    SELECT max_participants, COALESCE(end_time, start_time + 3600) INTO max_count, ends_at
+    FROM public.events
     WHERE event_id = NEW.event_id FOR UPDATE;
 
     -- Already joined: let the unique constraint handle it (the app treats that as success)
@@ -176,6 +197,13 @@ BEGIN
         WHERE event_id = NEW.event_id AND joiner_uid = NEW.joiner_uid
     ) THEN
         RETURN NEW;
+    END IF;
+
+    -- Only app requests (a logged-in user) are checked, so example data loaded
+    -- from the SQL editor can still add joins to old events. current_user
+    -- can't tell them apart: it's this function's owner (SECURITY DEFINER).
+    IF ends_at <= extract(epoch FROM now())::bigint AND (SELECT auth.uid()) IS NOT NULL THEN
+        RAISE EXCEPTION 'event_ended' USING ERRCODE = 'check_violation';
     END IF;
 
     IF max_count IS NOT NULL AND (
@@ -418,8 +446,8 @@ CREATE OR REPLACE TRIGGER on_event_joined
   FOR EACH ROW EXECUTE FUNCTION public.notify_event_joined();
 
 -- Tells everyone who joined when the time or place changes. `details` holds
--- the new values of what changed. A new start time also clears old reminders
--- so a fresh one is made for the new time.
+-- the new values of what changed (times come with `all_day`). A new start
+-- time also clears old reminders so a fresh one is made for the new time.
 CREATE OR REPLACE FUNCTION public.notify_event_updated()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -428,8 +456,9 @@ AS $$
 DECLARE
   changes JSONB := '{}'::jsonb;
 BEGIN
-  IF new.start_time IS DISTINCT FROM old.start_time OR new.end_time IS DISTINCT FROM old.end_time THEN
-    changes := changes || jsonb_build_object('start_time', new.start_time, 'end_time', new.end_time);
+  IF new.start_time IS DISTINCT FROM old.start_time OR new.end_time IS DISTINCT FROM old.end_time
+     OR new.all_day IS DISTINCT FROM old.all_day THEN
+    changes := changes || jsonb_build_object('start_time', new.start_time, 'end_time', new.end_time, 'all_day', new.all_day);
   END IF;
   IF new.location IS DISTINCT FROM old.location THEN
     changes := changes || jsonb_build_object('location', new.location);
@@ -451,7 +480,7 @@ BEGIN
 END;
 $$;
 CREATE OR REPLACE TRIGGER on_event_updated
-  AFTER UPDATE OF start_time, end_time, location ON events
+  AFTER UPDATE OF start_time, end_time, all_day, location ON events
   FOR EACH ROW EXECUTE FUNCTION public.notify_event_updated();
 
 -- Tells everyone who joined when an event is deleted. Runs BEFORE DELETE,
@@ -478,7 +507,8 @@ CREATE OR REPLACE TRIGGER on_event_deleted
 -- Creates "starts within the hour" reminders for the calling user's joined
 -- events. There's no server to run this on a schedule, so the app calls it
 -- each time it checks notifications (listNotifications in src/api.jsx).
--- Each reminder is made once (uq_notification_reminder).
+-- Each reminder is made once (uq_notification_reminder). All-day events get
+-- none: it would arrive around 11 PM the night before.
 CREATE OR REPLACE FUNCTION public.create_due_reminders()
 RETURNS void
 LANGUAGE plpgsql
@@ -495,7 +525,7 @@ BEGIN
   SELECT me, e.event_id, e.event_title, 'event_reminder'
   FROM public.joined_events j
   JOIN public.events e ON e.event_id = j.event_id
-  WHERE j.joiner_uid = me AND e.start_time > now_s AND e.start_time <= now_s + 3600
+  WHERE j.joiner_uid = me AND NOT e.all_day AND e.start_time > now_s AND e.start_time <= now_s + 3600
   ON CONFLICT (recipient_uid, event_id) WHERE notification_type = 'event_reminder' DO NOTHING;
 END;
 $$;
@@ -504,6 +534,7 @@ GRANT EXECUTE ON FUNCTION public.create_due_reminders() TO authenticated;
 
 -- Indexes for common lookups
 CREATE INDEX idx_events_start_time ON events(start_time);
+CREATE INDEX idx_events_archive_time ON events(archive_time);
 CREATE INDEX idx_events_organizer ON events(organizer_uid);
 CREATE INDEX idx_comments_event ON event_comments(event_id, comment_time);
 CREATE INDEX idx_joined_joiner ON joined_events(joiner_uid);

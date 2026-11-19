@@ -54,10 +54,35 @@ function check(condition, message) {
   if (!condition) throw new Error(message)
 }
 
+// What to say when the database rejects a row with a CHECK constraint
+// (docs/main_schema.sql). validateEvent() catches these first; this covers
+// anything that slips past it, like an old tab or a mistyped year.
+const CHECK_MESSAGES = {
+  events_start_time_check: 'That start time isn’t valid. Check the date, including the year.',
+  chk_event_times: 'The end can’t be before the start.',
+  chk_all_day_end: 'All-day events need a last day.',
+  events_event_title_check: `Title must be 1–${TITLE_MAX} characters.`,
+  events_event_description_check: `Description must be ${DESCRIPTION_MAX} characters or less.`,
+  events_location_check: `Location must be ${LOCATION_MAX} characters or less.`,
+  events_max_participants_check: `The headcount must be at least ${CAPACITY_MIN}.`,
+  events_picture_data_check: 'Picture must be a WebP image of 10MB or less.',
+}
+
 // Turns a Supabase error into one with a message we can show to users.
 function toError(error) {
   if (/failed to fetch|network/i.test(error.message)) {
     return new Error('Can’t reach the server. Check your internet and try again.')
+  }
+  // 23514 = check_violation. Raw messages read like 'new row for relation
+  // "events" violates check constraint "events_start_time_check"'.
+  if (error.code === '23514') {
+    const constraint = error.message.match(/check constraint "([^"]+)"/)?.[1]
+    return new Error(CHECK_MESSAGES[constraint] ?? 'Some of those details aren’t allowed. Check the form and try again.')
+  }
+  // The app is newer than the database: 42703 = undefined column (in a filter
+  // or select), PGRST204 = unknown column in an insert or update.
+  if (error.code === '42703' || error.code === 'PGRST204') {
+    return new Error('The database is missing a recent update. Ask the team to run the newest file in docs/migrations.')
   }
   return new Error(error.message)
 }
@@ -69,15 +94,33 @@ function unwrap({ data, error }) {
 
 // ---------- validation ----------
 
-export function validateEvent({ title, description, location, startTime, endTime, pictureData, maxParticipants }) {
+// How far in the past a new start time may be, so picking "now" still works
+// by the time the form is sent.
+const START_GRACE = 5 * 60
+
+// `checkStart`: the start time is new (posting, or changed while editing), so
+// it can't have passed. Unchanged times on an event that already started are
+// fine. Times are UNIX seconds, so the organizer's time zone doesn't matter.
+export function validateEvent(
+  { title, description, location, startTime, endTime, allDay = false, pictureData, maxParticipants },
+  { checkStart = false } = {},
+) {
   check(typeof title === 'string' && title.trim().length > 0, 'Title is required.')
   check(title.trim().length <= TITLE_MAX, `Title must be ${TITLE_MAX} characters or less.`)
   check(!description || description.trim().length <= DESCRIPTION_MAX, `Description must be ${DESCRIPTION_MAX} characters or less.`)
   check(!location || location.trim().length <= LOCATION_MAX, `Location must be ${LOCATION_MAX} characters or less.`)
-  check(Number.isInteger(startTime), 'Start time is required.')
+  check(Number.isInteger(startTime), allDay ? 'Pick a day.' : 'Start time is required.')
+  // Before 1970, e.g. the year typed as "26" (0026). Same rule as events_start_time_check.
+  check(startTime > 0, CHECK_MESSAGES.events_start_time_check)
+  if (allDay) check(endTime != null, 'All-day events need a last day.')
   if (endTime != null) {
     check(Number.isInteger(endTime), 'End time must be a UNIX timestamp.')
-    check(endTime >= startTime, 'End time can’t be before the start time.')
+    check(endTime >= startTime, allDay ? 'The last day can’t be before the first day.' : 'End time can’t be before the start time.')
+  }
+  if (checkStart) {
+    // All-day events can still be posted on their own day, until it ends.
+    if (allDay) check(endTime > nowSeconds(), 'That day has already passed. Pick today or a later day.')
+    else check(startTime >= nowSeconds() - START_GRACE, 'The start time has already passed. Pick a time in the future.')
   }
   if (pictureData != null) validateImageDataUrl(pictureData)
   // null = no limit
@@ -259,8 +302,28 @@ export async function getUsers(uids) {
 
 // ---------- categories ----------
 
+// Names only; the pictures are big, so they load once through categoryPictures().
 export async function listCategories() {
-  return unwrap(await supabase.from('event_categories').select('*').order('name'))
+  return unwrap(await supabase.from('event_categories').select('category_id, name').order('name'))
+}
+
+let categoryPicturesRequest = null
+
+// { [category_id]: picture data URL } for categories that have a default cover
+// picture (event_categories.picture_data). Loaded once per page load and shared;
+// a failed load is tried again on the next call.
+export function categoryPictures() {
+  categoryPicturesRequest ??= supabase
+    .from('event_categories')
+    .select('category_id, picture_data')
+    .not('picture_data', 'is', null)
+    .then(unwrap)
+    .then((rows) => Object.fromEntries(rows.map((row) => [row.category_id, row.picture_data])))
+    .catch((err) => {
+      categoryPicturesRequest = null
+      throw err
+    })
+  return categoryPicturesRequest
 }
 
 // ---------- events ----------
@@ -270,12 +333,19 @@ export async function listCategories() {
 const ACTIVE_EVENT_COLUMNS =
   '*, organizer:users!inner(uid, full_name, is_active), category:event_categories(category_id, name), joined:joined_events(count)'
 
-// Soonest first. Filters are optional: categoryId, and a [from, to] window on
-// start_time. Events by deleted accounts are left out (they still open by link).
+// Soonest first. Filters are optional: categoryId, and a [from, to] window:
+// events still going at `from` (so a multi-day event stays listed after its
+// first day) that start by `to`. Events by deleted accounts and archived
+// events (archive_time passed) are left out; both still open by link.
 export async function listEvents({ categoryId, from, to } = {}) {
-  let query = supabase.from('events').select(ACTIVE_EVENT_COLUMNS).eq('organizer.is_active', true)
+  let query = supabase
+    .from('events')
+    .select(ACTIVE_EVENT_COLUMNS)
+    .eq('organizer.is_active', true)
+    .gt('archive_time', nowSeconds())
   if (categoryId) query = query.eq('category_id', categoryId)
-  if (from != null) query = query.gte('start_time', from)
+  // Events without an end time count as an hour long (DEFAULT_DURATION).
+  if (from != null) query = query.or(`end_time.gte.${from},and(end_time.is.null,start_time.gte.${from - 3600})`)
   if (to != null) query = query.lte('start_time', to)
   return unwrap(await query.order('start_time', { ascending: true }))
 }
@@ -296,12 +366,13 @@ export async function createEvent({
   location,
   startTime,
   endTime,
+  allDay = false,
   organizerUid,
   categoryId,
   pictureData,
   maxParticipants = null,
 }) {
-  validateEvent({ title, description, location, startTime, endTime, pictureData, maxParticipants })
+  validateEvent({ title, description, location, startTime, endTime, allDay, pictureData, maxParticipants }, { checkStart: true })
   check(organizerUid, 'Organizer is required.')
   const row = {
     event_id: crypto.randomUUID(),
@@ -310,6 +381,7 @@ export async function createEvent({
     create_time: nowSeconds(),
     start_time: startTime,
     end_time: endTime ?? null,
+    all_day: allDay,
     location: location?.trim() || null,
     organizer_uid: organizerUid,
     category_id: categoryId || null,
@@ -335,10 +407,13 @@ export async function updateEvent(eventId, changes) {
     location: changes.location !== undefined ? changes.location : current.location,
     startTime: changes.startTime ?? current.start_time,
     endTime: changes.endTime !== undefined ? changes.endTime : current.end_time,
+    allDay: changes.allDay ?? current.all_day ?? false,
     pictureData: changes.pictureData !== undefined ? changes.pictureData : current.picture_data,
     maxParticipants: changes.maxParticipants !== undefined ? changes.maxParticipants : current.max_participants,
   }
-  validateEvent(merged)
+  // Only a changed start (or switching all day on/off) has to be in the future.
+  const timeChanged = merged.startTime !== current.start_time || merged.allDay !== Boolean(current.all_day)
+  validateEvent(merged, { checkStart: timeChanged })
   const joined = joinedCount(current)
   check(merged.maxParticipants == null || merged.maxParticipants >= joined, capacityBelowJoinedMessage(joined))
   const row = {
@@ -347,6 +422,7 @@ export async function updateEvent(eventId, changes) {
     location: merged.location?.trim() || null,
     start_time: merged.startTime,
     end_time: merged.endTime,
+    all_day: merged.allDay,
     picture_data: merged.pictureData,
     max_participants: merged.maxParticipants,
   }
@@ -400,6 +476,11 @@ export async function joinEvent(eventId, uid) {
   if (error?.message === 'event_full') {
     // `code` lets the page tell this apart from other failures.
     throw Object.assign(new Error('Sorry, this event just filled up.'), { code: 'event_full' })
+  }
+  // Already over (see src/utils/archive.js), e.g. a page left open since it
+  // ended. 'event_archived' is the older name of the same check.
+  if (error?.message === 'event_ended' || error?.message === 'event_archived') {
+    throw Object.assign(new Error('This event has ended, so it can’t be joined.'), { code: 'event_ended' })
   }
   if (error) throw toError(error)
 }

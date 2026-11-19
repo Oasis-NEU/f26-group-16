@@ -1,5 +1,5 @@
 import { useCallback, useId, useState } from 'react'
-import { daySegments, hourRange, layoutDay, toSeconds, weekDays } from '../utils/calendar.js'
+import { allDayItems, daySegments, hourRange, layoutDay, toSeconds, weekDays } from '../utils/calendar.js'
 import { eventEnd, formatTimeRange } from '../utils/schedule.js'
 import EventPicture from './EventPicture.jsx'
 import EventPopover from './EventPopover.jsx'
@@ -14,11 +14,13 @@ import EventPopover from './EventPopover.jsx'
 
 // Hour rows shrink so the whole grid fits on screen: the viewport height
 // minus everything above the grid (--chrome: menu bar, page header, toolbar,
-// day headers; taller on phones where the header stacks), split across the
-// visible hours, kept between 1.25rem and 3rem. Positions below are
-// multiples of --hour.
+// day headers; taller on phones where the header stacks) and the "All day"
+// row (--allday, when there is one), split across the visible hours, kept
+// between 1.25rem and 3rem. Positions below are multiples of --hour.
 const chromeClass = '[--chrome:29rem] sm:[--chrome:25rem]'
-const hourSize = (hourCount) => `clamp(1.25rem, calc((100dvh - var(--chrome)) / ${hourCount}), 3rem)`
+const hourSize = (hourCount) => `clamp(1.25rem, calc((100dvh - var(--chrome) - var(--allday)) / ${hourCount}), 3rem)`
+// "All day" row: chips are 1.25rem tall with 0.25rem gaps, plus 0.5rem padding.
+const allDayRowHeight = (chips) => (chips === 0 ? '0rem' : `${chips * 1.5 + 0.25}rem`)
 const hours = (n, px = 0) => `calc(var(--hour) * ${n} + ${px}px)`
 const hourLabel = new Intl.DateTimeFormat(undefined, { hour: 'numeric' })
 const weekdayLabel = new Intl.DateTimeFormat(undefined, { weekday: 'short' })
@@ -71,6 +73,24 @@ function DayHeader({ day, today }) {
 }
 
 const segmentKey = (segment) => `${segment.kind}-${segment.event.event_id}`
+
+// The + (join a suggestion) or × (leave a joined event) button in the corner
+// of a calendar block or All day chip.
+function BlockAction({ event, suggested, busy, onAdd, onRemove }) {
+  return (
+    <button
+      type="button"
+      onClick={() => (suggested ? onAdd : onRemove)(event)}
+      disabled={busy}
+      aria-label={suggested ? `Add ${event.event_title} to your schedule` : `Remove ${event.event_title} from your schedule`}
+      className={`absolute right-0.5 top-0.5 flex h-4 w-4 items-center justify-center rounded text-xs font-bold leading-none disabled:opacity-50 ${
+        suggested ? 'bg-brand-500 text-white hover:bg-brand-600' : 'text-white hover:bg-brand-700'
+      }`}
+    >
+      <span aria-hidden="true">{suggested ? '+' : '×'}</span>
+    </button>
+  )
+}
 
 function Block({ segment, firstHour, conflict, busy, past, open, popoverId, onRemove, onAdd, onOpen }) {
   const { event, kind } = segment
@@ -133,19 +153,35 @@ function Block({ segment, firstHour, conflict, busy, past, open, popoverId, onRe
           </div>
         )}
       </button>
-      {hasAction && (
-        <button
-          type="button"
-          onClick={() => (suggested ? onAdd : onRemove)(event)}
-          disabled={busy}
-          aria-label={suggested ? `Add ${event.event_title} to your schedule` : `Remove ${event.event_title} from your schedule`}
-          className={`absolute right-0.5 top-0.5 flex h-4 w-4 items-center justify-center rounded text-xs font-bold leading-none disabled:opacity-50 ${
-            suggested ? 'bg-brand-500 text-white hover:bg-brand-600' : 'text-white hover:bg-brand-700'
-          }`}
-        >
-          <span aria-hidden="true">{suggested ? '+' : '×'}</span>
-        </button>
-      )}
+      {hasAction && <BlockAction event={event} suggested={suggested} busy={busy} onAdd={onAdd} onRemove={onRemove} />}
+    </div>
+  )
+}
+
+// A chip in the "All day" row: solid for joined/hosted, dashed for
+// suggestions, with the same + / × button and popover as hour-grid blocks.
+function AllDayChip({ item, busy, past, open, popoverId, onRemove, onAdd, onOpen }) {
+  const { event, kind } = item
+  const suggested = kind === 'suggested'
+  const hasAction = kind !== 'hosted'
+  const look = suggested
+    ? 'border border-dashed border-brand-500 bg-brand-50 text-ink hover:bg-brand-100'
+    : 'bg-brand-500 text-white shadow-sm hover:bg-brand-600'
+  return (
+    <div className={`relative h-5 overflow-hidden rounded-md ${look} ${past ? 'opacity-60' : ''}`} data-schedule-block="">
+      <button
+        type="button"
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        aria-controls={open ? popoverId : undefined}
+        onClick={(e) => onOpen(item, e.currentTarget)}
+        className={`flex h-full w-full items-center rounded-md pl-1.5 text-left text-[10px] font-semibold leading-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand-900 ${
+          hasAction ? 'pr-5' : 'pr-1.5'
+        }`}
+      >
+        <span className="truncate">{event.event_title}</span>
+      </button>
+      {hasAction && <BlockAction event={event} suggested={suggested} busy={busy} onAdd={onAdd} onRemove={onRemove} />}
     </div>
   )
 }
@@ -154,6 +190,9 @@ export default function WeekCalendar({ weekStart, selectedIndex, onSelectDay, it
   const days = weekDays(weekStart)
   const today = new Date(now * 1000)
   const segmentsByDay = days.map((day) => layoutDay(daySegments(items, day)))
+  // All-day events go in their own row above the hours.
+  const allDayByDay = days.map((day) => allDayItems(items, day))
+  const allDayChips = Math.max(0, ...allDayByDay.map((dayItems) => dayItems.length))
   const [firstHour, lastHour] = hourRange(segmentsByDay)
   const hourList = Array.from({ length: lastHour - firstHour }, (_, i) => firstHour + i)
   const height = hours(hourList.length)
@@ -184,14 +223,17 @@ export default function WeekCalendar({ weekStart, selectedIndex, onSelectDay, it
 
   // Look the event up again by id, so the popover follows it from suggested
   // to joined (and back), and closes if it leaves the week.
-  const allSegments = segmentsByDay.flat()
+  const allSegments = [...segmentsByDay.flat(), ...allDayByDay.flat()]
   const previewed =
     preview &&
     (allSegments.find((s) => s.event.event_id === preview.eventId && s.kind !== 'suggested') ??
       allSegments.find((s) => s.event.event_id === preview.eventId))
 
   return (
-    <div className={`overflow-hidden rounded-2xl border border-line bg-surface shadow-sm ${chromeClass}`} style={{ '--hour': hourSize(hourList.length) }}>
+    <div
+      className={`overflow-hidden rounded-2xl border border-line bg-surface shadow-sm ${chromeClass}`}
+      style={{ '--allday': allDayRowHeight(allDayChips), '--hour': hourSize(hourList.length) }}
+    >
       {/* Phones: pick one day. */}
       <div role="group" aria-label="Day" className="flex gap-1 border-b border-line p-2 sm:hidden">
         {days.map((day, i) => (
@@ -200,7 +242,7 @@ export default function WeekCalendar({ weekStart, selectedIndex, onSelectDay, it
             day={day}
             today={today}
             selected={i === selectedIndex}
-            marker={dayMarker(segmentsByDay[i])}
+            marker={dayMarker([...segmentsByDay[i], ...allDayByDay[i]])}
             onSelect={() => onSelectDay(i)}
           />
         ))}
@@ -212,6 +254,36 @@ export default function WeekCalendar({ weekStart, selectedIndex, onSelectDay, it
           <DayHeader key={i} day={day} today={today} />
         ))}
       </div>
+
+      {allDayChips > 0 && (
+        <div className={`${gridCols} border-b border-line`} style={{ minHeight: 'var(--allday)' }}>
+          <p className="self-center pr-2 text-right text-[11px] leading-tight text-muted">All day</p>
+          {days.map((day, i) => (
+            <div
+              key={i}
+              role="group"
+              aria-label={`All day, ${fullDayLabel.format(day)}`}
+              className={`space-y-1 border-l border-line p-1 ${i === selectedIndex ? 'block' : 'hidden sm:block'} ${
+                isSameDay(day, today) ? 'bg-brand-50' : ''
+              }`}
+            >
+              {allDayByDay[i].map((item) => (
+                <AllDayChip
+                  key={segmentKey(item)}
+                  item={item}
+                  busy={Boolean(pending[item.event.event_id])}
+                  past={eventEnd(item.event) < now}
+                  open={Boolean(previewed) && preview.eventId === item.event.event_id && preview.day === i}
+                  popoverId={popoverId}
+                  onRemove={onRemove}
+                  onAdd={onAdd}
+                  onOpen={(it, trigger) => togglePreview(i, it, trigger)}
+                />
+              ))}
+            </div>
+          ))}
+        </div>
+      )}
 
       <div className={gridCols}>
         <div className="relative" style={{ height }} aria-hidden="true">
