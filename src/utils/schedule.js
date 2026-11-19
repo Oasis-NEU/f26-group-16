@@ -39,8 +39,26 @@ export const DEFAULT_DURATION = 60 * 60
 
 export const eventEnd = (event) => event.end_time ?? event.start_time + DEFAULT_DURATION
 
-// True when two events share any time. Back-to-back events don't count.
-export const overlaps = (a, b) => a.start_time < eventEnd(b) && b.start_time < eventEnd(a)
+// True when two events share any time. Back-to-back events don't count, and
+// neither do all-day events: they sit in the calendar's "All day" row and
+// don't take up the user's time.
+export const overlaps = (a, b) =>
+  !a.all_day && !b.all_day && a.start_time < eventEnd(b) && b.start_time < eventEnd(a)
+
+// Suggestions stay within these local hours [from, to] unless the user turns
+// on early & late events.
+export const REGULAR_HOURS = [8, 21]
+
+// True when the event starts at or after `from` o'clock and ends by `to`
+// o'clock on the same day (local time). All-day events always fit.
+export function withinHours(event, [from, to]) {
+  if (event.all_day) return true
+  const start = new Date(event.start_time * 1000)
+  const end = new Date(eventEnd(event) * 1000)
+  const dayStart = new Date(start.getFullYear(), start.getMonth(), start.getDate())
+  const hoursIn = (date) => (date - dayStart) / 3600000
+  return hoursIn(start) >= from && hoursIn(end) <= to
+}
 
 // { [event_id]: [titles of other events it overlaps] } for events with clashes.
 export function findConflicts(events) {
@@ -59,9 +77,10 @@ export function findConflicts(events) {
 
 // Events that fit the user's open time: not joined, not their own, not started
 // yet, not full, and not overlapping anything in `busy` (what they joined, plus
-// the events they're hosting). Categories the user joins most come first, then
-// the soonest.
-export function suggestEvents({ candidates, joined, busy = joined, uid, now, limit = 6 }) {
+// the events they're hosting). With `hours` ([from, to], e.g. REGULAR_HOURS)
+// they must also fall within those hours; null allows any time. Categories the
+// user joins most come first, then the soonest.
+export function suggestEvents({ candidates, joined, busy = joined, uid, now, hours = null, limit = 6 }) {
   const joinedIds = new Set(joined.map((event) => event.event_id))
   const categoryCounts = {}
   for (const event of joined) {
@@ -74,8 +93,10 @@ export function suggestEvents({ candidates, joined, busy = joined, uid, now, lim
       (event) =>
         !joinedIds.has(event.event_id) &&
         event.organizer_uid !== uid &&
-        event.start_time > now &&
+        // Not started yet; all-day events can be joined until their last day ends.
+        (event.all_day ? eventEnd(event) > now : event.start_time > now) &&
         !isFull(event) &&
+        (!hours || withinHours(event, hours)) &&
         !busy.some((mine) => overlaps(mine, event)),
     )
     .sort((a, b) => score(b) - score(a) || a.start_time - b.start_time)

@@ -16,7 +16,7 @@ const timeOnly = new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '
 // that changed (see notify_event_updated in docs/main_schema.sql).
 function describeChanges(details) {
   const parts = []
-  if (details?.start_time != null) parts.push(`now ${formatEventTime(details.start_time, details.end_time)}`)
+  if (details?.start_time != null) parts.push(`now ${formatEventTime(details.start_time, details.end_time, details.all_day)}`)
   if (details && 'location' in details) parts.push(details.location ? `at ${details.location}` : 'location to be announced')
   return parts.join(', ')
 }

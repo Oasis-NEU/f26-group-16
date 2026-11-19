@@ -114,7 +114,7 @@ export default function EventPopover({
       <EventPicture event={event} className="h-24 sm:h-28 lg:h-36" glyphClass="text-4xl" />
       <div className="space-y-2 p-4 text-sm lg:space-y-3 lg:p-5">
         <div>
-          <p className="font-semibold text-brand-600">{formatEventTime(event.start_time, event.end_time)}</p>
+          <p className="font-semibold text-brand-600">{formatEventTime(event.start_time, event.end_time, event.all_day)}</p>
           <h3 id={titleId} className="line-clamp-2 text-base font-bold leading-snug text-ink lg:text-lg">
             {event.event_title}
           </h3>

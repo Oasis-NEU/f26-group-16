@@ -114,12 +114,22 @@ const EVENTS = [
       'Build anything in 24 hours with a team of up to four. Workshops for first-timers on Saturday morning, demos and prizes at the end.',
   },
   {
+    title: 'Fall Club Fair',
+    category: 'clubs',
+    // All day: local midnight to 23:59:59, like the app saves them.
+    allDay: true,
+    start: at(5, 0),
+    end: at(5, 23, 59) + 59,
+    location: 'Centennial Common',
+    description: 'Every club has a table out on the Common all day. Drop by whenever you’re free and grab some stickers.',
+  },
+  {
     title: 'Welcome Back Picnic',
     category: 'social',
     start: at(-10, 12),
     end: at(-10, 15),
     location: 'Main Quad',
-    description: 'Free food, lawn games, and club tables. (This one already happened; it shows up when you widen the date filter.)',
+    description: 'Free food, lawn games, and club tables. (This one already happened, so it’s archived: it’s off the homepage but still opens by link and on the organizer’s profile.)',
   },
 ]
 
@@ -149,6 +159,7 @@ for (const event of EVENTS) {
     create_time: now,
     start_time: event.start,
     end_time: event.end,
+    all_day: event.allDay ?? false,
     location: event.location,
     organizer_uid: uid,
     category_id: event.category,

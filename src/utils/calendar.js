@@ -2,6 +2,7 @@
 // to day columns, and side-by-side layout for overlapping blocks. Pure
 // functions; times on events are UNIX seconds, positions are in hours.
 
+import { allDayDates } from './format.js'
 import { eventEnd } from './schedule.js'
 
 // Short events still get a block tall enough to read and click.
@@ -35,17 +36,31 @@ export function formatWeekLabel(weekStart) {
   return `${first} – ${end}`
 }
 
-// Each item is { event, kind }. Returns the items that touch `day`, clipped to
-// it, with `top`/`bottom` in hours since local midnight. `bottom` is stretched
-// to MIN_BLOCK_HOURS so tiny events stay visible (and lay out that way too).
+const touchesDay = (event, dayStart, dayEnd) => event.start_time < dayEnd && eventEnd(event) > dayStart
+
+// All-day items ({ event, kind }) on `day` (local midnight), for the "All
+// day" row. They stay out of the hour grid. Days come from allDayDates(), so
+// the event sits on the organizer's days even in another time zone.
+export function allDayItems(items, day) {
+  return items.filter((item) => {
+    if (!item.event.all_day) return false
+    const { first, last } = allDayDates(item.event.start_time, item.event.end_time)
+    return first <= day && day <= last
+  })
+}
+
+// Each item is { event, kind }. Returns the timed items that touch `day`,
+// clipped to it, with `top`/`bottom` in hours since local midnight. `bottom` is
+// stretched to MIN_BLOCK_HOURS so tiny events stay visible (and lay out that
+// way too). All-day events are left out (see allDayItems).
 export function daySegments(items, day) {
   const dayStart = toSeconds(day)
   const dayEnd = toSeconds(addDays(day, 1))
   const segments = []
   for (const item of items) {
+    if (item.event.all_day || !touchesDay(item.event, dayStart, dayEnd)) continue
     const start = item.event.start_time
     const end = eventEnd(item.event)
-    if (start >= dayEnd || end <= dayStart) continue
     const top = (Math.max(start, dayStart) - dayStart) / 3600
     const realBottom = (Math.min(end, dayEnd) - dayStart) / 3600
     segments.push({ ...item, top, bottom: Math.min(24, Math.max(realBottom, top + MIN_BLOCK_HOURS)) })

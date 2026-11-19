@@ -19,6 +19,7 @@ import UserName from '../components/UserName.jsx'
 import { ErrorMessage, Notice, inputClass, primaryButton, secondaryButton, smallButton } from '../components/ui.jsx'
 import { joinedCount } from '../utils/capacity.js'
 import { openChat, openGroupChat } from '../utils/chat_events.js'
+import { hasEnded, isArchived } from '../utils/archive.js'
 import { formatEventTime, formatTimestamp } from '../utils/format.js'
 import { HOME_PATH, editEventPath, navigate } from '../utils/routes.js'
 import { showToast } from '../utils/toast.js'
@@ -221,12 +222,16 @@ function JoinerList({ eventId, profile, refreshKey, isOrganizer }) {
 // `max` is the headcount limit (null = no limit). Once it's reached, people who
 // haven't joined see a disabled "Full" button; people already in can still leave.
 // Organizers can't join their own event: with `organizerActions` set (the Edit
-// and Delete buttons), those take the Join button's place.
-function JoinButton({ eventId, profile, initialCount, initialJoined, max, organizerActions, onChange }) {
+// and Delete buttons), those take the Join button's place. Archived events
+// that have ended can't be joined either ("Event ended"), but people already
+// in can leave.
+function JoinButton({ eventId, profile, initialCount, initialJoined, max, hasEnded, organizerActions, onChange }) {
   const [joined, setJoined] = useState(initialJoined)
   const [count, setCount] = useState(initialCount)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  // Also set when the database says it ended while the page was open.
+  const [ended, setEnded] = useState(hasEnded)
   const full = max != null && count >= max
   const left = max != null ? Math.max(0, max - count) : null
 
@@ -246,6 +251,7 @@ function JoinButton({ eventId, profile, initialCount, initialJoined, max, organi
       // Someone else took the last spot: show it as full instead of rolling back.
       if (err.code === 'event_full') setCount(max)
       else setCount((c) => c - (next ? 1 : -1))
+      if (err.code === 'event_ended') setEnded(true)
       setError(err.message)
     }
     setBusy(false)
@@ -274,11 +280,11 @@ function JoinButton({ eventId, profile, initialCount, initialJoined, max, organi
         <button
           type="button"
           onClick={toggle}
-          disabled={busy || (full && !joined)}
+          disabled={busy || ((full || ended) && !joined)}
           aria-pressed={joined}
           className={`${joined ? secondaryButton : primaryButton} w-full`}
         >
-          {joined ? 'Leave event' : full ? 'Full' : 'Join event'}
+          {joined ? 'Leave event' : ended ? 'Event ended' : full ? 'Full' : 'Join event'}
         </button>
       )}
       <ErrorMessage message={error} />
@@ -402,7 +408,7 @@ function CommentForm({ eventId, profile, replyingTo, onPosted, onCancel }) {
         maxLength={COMMENT_MAX}
         placeholder={replyingTo ? 'Write a reply…' : 'Ask a question or say you’re coming…'}
         autoFocus={Boolean(replyingTo)}
-        className={`${inputClass} resize-y`}
+        className={`${inputClass} max-h-64 resize-y`}
       />
       <ErrorMessage message={error} />
       <div className="flex items-center justify-end gap-2">
@@ -652,6 +658,8 @@ export default function EventDetail({ eventId, profile }) {
 
   const isOrganizer = event.organizer_uid === profile.uid
   const organizerActive = Boolean(event.organizer?.is_active)
+  const ended = hasEnded(event)
+  const archived = isArchived(event)
 
   return (
     <article className="space-y-6">
@@ -664,6 +672,12 @@ export default function EventDetail({ eventId, profile }) {
           </span>
         )}
         <h1 className="break-words text-3xl font-extrabold tracking-tight text-ink sm:text-4xl">{event.event_title}</h1>
+        {ended && (
+          <p className="inline-flex items-center gap-2 rounded-xl bg-brand-50 px-4 py-2 text-sm font-semibold text-muted">
+            <span aria-hidden="true">🗄️</span> This event has ended.
+            {archived && ' It’s no longer listed on the homepage.'}
+          </p>
+        )}
       </header>
 
       <div className="grid gap-8 lg:grid-cols-3">
@@ -671,7 +685,7 @@ export default function EventDetail({ eventId, profile }) {
         <aside className="space-y-6 self-start rounded-2xl border border-line bg-surface p-6 shadow-sm lg:sticky lg:top-24 lg:col-start-3 lg:row-start-1">
           <div className="space-y-4">
             <InfoRow icon="🗓️" label="When">
-              {formatEventTime(event.start_time, event.end_time)}
+              {formatEventTime(event.start_time, event.end_time, event.all_day)}
             </InfoRow>
             <InfoRow icon="📍" label="Where">
               {event.location || <span className="font-normal text-muted">Location to be announced</span>}
@@ -687,6 +701,7 @@ export default function EventDetail({ eventId, profile }) {
             initialCount={joinedCount(event)}
             initialJoined={result.joined}
             max={event.max_participants}
+            hasEnded={ended}
             organizerActions={isOrganizer ? <OrganizerActions event={event} /> : null}
             onChange={() => setJoinChanges((n) => n + 1)}
           />

@@ -4,7 +4,7 @@ import { ErrorMessage, secondaryButton, smallButton } from '../components/ui.jsx
 import WeekCalendar from '../components/WeekCalendar.jsx'
 import { addDays, formatWeekLabel, startOfWeek, toSeconds } from '../utils/calendar.js'
 import { HOME_PATH } from '../utils/routes.js'
-import { eventEnd, findConflicts, suggestEvents } from '../utils/schedule.js'
+import { REGULAR_HOURS, eventEnd, findConflicts, suggestEvents } from '../utils/schedule.js'
 
 // Most suggestions shown in one week, so the calendar doesn't get crowded.
 const SUGGESTIONS_PER_WEEK = 8
@@ -16,16 +16,19 @@ const insertSorted = (events, event) => [...events, event].sort((a, b) => a.star
 const without = (events, eventId) => events.filter((event) => event.event_id !== eventId)
 const inWeek = (events, from, to) => events.filter((event) => event.start_time < to && eventEnd(event) > from)
 
-function SuggestionsSwitch({ on, onToggle }) {
+const hourName = (hour) => new Date(2000, 0, 1, hour).toLocaleTimeString(undefined, { hour: 'numeric' })
+const REGULAR_HOURS_LABEL = `${hourName(REGULAR_HOURS[0])} and ${hourName(REGULAR_HOURS[1])}`
+
+function Switch({ label, on, onToggle, className = '' }) {
   return (
     <button
       type="button"
       role="switch"
       aria-checked={on}
       onClick={onToggle}
-      className="inline-flex shrink-0 items-center gap-3 self-start rounded-xl py-1 text-sm font-semibold text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 sm:self-auto"
+      className={`inline-flex shrink-0 items-center gap-3 rounded-xl py-1 text-sm font-semibold text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 ${className}`}
     >
-      Suggest events
+      {label}
       <span
         aria-hidden="true"
         className={`inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors motion-reduce:transition-none ${
@@ -65,6 +68,8 @@ export default function Schedule({ profile }) {
   // Suggestions start off and aren't saved anywhere. Results are cached per
   // week (and retry), so toggling or going back to a week doesn't refetch.
   const [showSuggestions, setShowSuggestions] = useState(false)
+  // Off: suggestions stay within REGULAR_HOURS. Also page state only.
+  const [anyHour, setAnyHour] = useState(false)
   const [suggestRetries, setSuggestRetries] = useState(0)
   const [suggestCache, setSuggestCache] = useState({})
 
@@ -131,9 +136,10 @@ export default function Schedule({ profile }) {
       busy: busyEvents,
       uid: profile.uid,
       now,
+      hours: anyHour ? null : REGULAR_HOURS,
       limit: SUGGESTIONS_PER_WEEK,
     })
-  }, [showSuggestions, joinedEvents, busyEvents, weekSuggestions, pending, profile.uid, now])
+  }, [showSuggestions, anyHour, joinedEvents, busyEvents, weekSuggestions, pending, profile.uid, now])
 
   const items = useMemo(
     () => [
@@ -217,8 +223,10 @@ export default function Schedule({ profile }) {
       status = (
         <StatusLine>
           {suggestions.length === 0
-            ? 'Nothing fits your open time this week.'
-            : `${suggestions.length} ${suggestions.length === 1 ? 'event fits' : 'events fit'} your open time this week. They’re the dashed ones. Tap + to add.`}
+            ? `Nothing fits your open time this week${anyHour ? '' : ` between ${REGULAR_HOURS_LABEL}`}.`
+            : `${suggestions.length} ${suggestions.length === 1 ? 'event fits' : 'events fit'} your open time this week${
+                anyHour ? '' : ` between ${REGULAR_HOURS_LABEL}`
+              }. They’re the dashed ones. Tap + to add.`}
         </StatusLine>
       )
     } else if (weekJoined.length === 0 && weekHosted.length === 0) {
@@ -277,7 +285,13 @@ export default function Schedule({ profile }) {
           <h1 className="text-3xl font-extrabold tracking-tight text-ink sm:text-4xl">Your schedule</h1>
           <p className="mt-2 text-muted">Everything you’ve joined or are hosting, plus stuff that fits your free time.</p>
         </div>
-        <SuggestionsSwitch on={showSuggestions} onToggle={() => setShowSuggestions((on) => !on)} />
+        {/* One row from `sm` up, so the calendar's height math still fits. */}
+        <div className="flex flex-wrap gap-x-6 gap-y-1 self-start sm:flex-nowrap sm:self-auto">
+          <Switch label="Suggest events" on={showSuggestions} onToggle={() => setShowSuggestions((on) => !on)} />
+          {showSuggestions && (
+            <Switch label="Include early & late events" on={anyHour} onToggle={() => setAnyHour((on) => !on)} />
+          )}
+        </div>
       </div>
 
       <div className="mt-8 flex flex-wrap items-center gap-2">
